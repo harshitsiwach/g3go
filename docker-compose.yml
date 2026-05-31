@@ -1,0 +1,78 @@
+services:
+  # Redis for job queue
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL for Supabase (optional, can use Supabase cloud)
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: browserforge
+      POSTGRES_PASSWORD: browserforge_dev
+      POSTGRES_DB: browserforge
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Export worker
+  export-worker:
+    build:
+      context: .
+      dockerfile: apps/api/docker/Dockerfile
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DOCKER_SOCKET=/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # API server
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - '3001:3001'
+    environment:
+      - PORT=3001
+      - HOST=0.0.0.0
+      - REDIS_URL=redis://redis:6379
+      - CORS_ORIGIN=http://localhost:3000
+      - DATABASE_URL=postgresql://browserforge:browserforge_dev@postgres:5432/browserforge
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+
+  # Web frontend (for development, use pnpm dev locally)
+  # Uncomment to run frontend in Docker
+  # web:
+  #   build:
+  #     context: .
+  #     dockerfile: apps/web/Dockerfile
+  #   ports:
+  #     - '3000:3000'
+  #   environment:
+  #     - NEXT_PUBLIC_API_URL=http://api:3001
+  #     - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+  #     - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+  #   depends_on:
+  #     - api
+
+volumes:
+  redis_data:
+  postgres_data:

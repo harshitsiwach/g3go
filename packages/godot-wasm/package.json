@@ -1,0 +1,8 @@
+{
+  "name": "@browser-forge/godot-wasm",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "download": "echo 'Download Godot Wasm assets from https://github.com/dwalter/godotwebgpu/releases'"
+  }
+}
