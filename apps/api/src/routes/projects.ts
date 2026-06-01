@@ -3,7 +3,7 @@ import { z } from 'zod';
 import db from '../db.js';
 
 const ProjectSchema = z.object({
-  name: z.string().min(1).max(100),
+  name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).optional(),
   template: z.string().max(50).optional(),
 });
@@ -73,7 +73,7 @@ export async function projectRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/', async (request, reply) => {
-    const body = request.body as any;
+    const body = (request.body as any) ?? {};
     const result = ProjectSchema.safeParse(body);
     if (!result.success) {
       return reply.status(400).send({
@@ -82,17 +82,32 @@ export async function projectRoutes(fastify: FastifyInstance) {
       });
     }
 
-    const id = Date.now().toString();
+    // Per-template display name. Falls back to a timestamped default so a
+    // user can fire `POST /api/projects {}` with nothing and still get back
+    // a project they can immediately open in the editor.
+    const TEMPLATE_NAMES: Record<string, string> = {
+      'blank': 'Untitled Project',
+      'platformer': 'Platformer Demo',
+      'topdown': 'Top-Down Shooter',
+      'puzzle': 'Match-3 Puzzle',
+      'web3-onboarding': 'Web3 Token-Gated Demo',
+      'web3-coin-collect': 'Token-Gated Coin Collector',
+      'telegram-invite': 'Telegram Mini App',
+    };
+    const template = result.data.template || 'blank';
+    const name = result.data.name || TEMPLATE_NAMES[template] || 'Untitled Project';
+
+    const id = `proj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const now = new Date().toISOString();
     db.prepare(`
       INSERT INTO projects (id, name, description, user_id, template, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
-      result.data.name,
+      name,
       result.data.description || '',
       'user-1',
-      result.data.template || 'blank',
+      template,
       now,
       now,
     );

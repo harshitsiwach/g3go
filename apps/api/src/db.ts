@@ -63,6 +63,21 @@ db.exec(`
   );
 `);
 
+// ------------------------------------------------------------
+// Idempotent migrations for older v0.1 DBs
+// ------------------------------------------------------------
+function hasColumn(table: string, column: string): boolean {
+  const row = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return row.some((c) => c.name === column);
+}
+
+if (!hasColumn('projects', 'template')) {
+  db.exec(`ALTER TABLE projects ADD COLUMN template TEXT DEFAULT 'blank'`);
+}
+if (!hasColumn('projects', 'web3_config')) {
+  db.exec(`ALTER TABLE projects ADD COLUMN web3_config TEXT`);
+}
+
 const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
 if (userCount.count === 0) {
   const hash = createHash('sha256').update('demo123').digest('hex');

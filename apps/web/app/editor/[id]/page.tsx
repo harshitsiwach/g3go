@@ -144,7 +144,31 @@ export default function EditorPage() {
 
   useEffect(() => {
     if (projectId === 'new') {
-      router.push('/dashboard');
+      // Guest flow: hit the API, get a real id, swap into the editor.
+      // We do not require login — the server defaults to user-1.
+      const search = typeof window !== 'undefined' ? window.location.search : '';
+      const params = new URLSearchParams(search);
+      const template = params.get('template') || 'blank';
+      const name = params.get('name') || undefined;
+
+      fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template, ...(name ? { name } : {}) }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.success && data.data?.id) {
+            router.replace(`/editor/${data.data.id}`);
+          } else {
+            setError(data?.error || 'Could not create a new project');
+            setLoading(false);
+          }
+        })
+        .catch((err) => {
+          setError(`Network error creating project: ${err instanceof Error ? err.message : 'unknown'}`);
+          setLoading(false);
+        });
       return;
     }
 

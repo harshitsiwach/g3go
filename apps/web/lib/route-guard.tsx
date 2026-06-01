@@ -5,7 +5,9 @@ import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from './auth-context';
 import { Loader2 } from 'lucide-react';
 
-const PROTECTED_PREFIXES = ['/dashboard', '/editor', '/export', '/settings'];
+// Editor and export are guest-accessible so people can start creating
+// without an account. Only project management + settings require login.
+const PROTECTED_PREFIXES = ['/dashboard', '/settings'];
 const AUTH_ROUTES = ['/login', '/signup'];
 
 export function RouteGuard({ children }: { children: React.ReactNode }) {

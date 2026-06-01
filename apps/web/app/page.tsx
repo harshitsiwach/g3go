@@ -21,7 +21,7 @@ export default function Home() {
             Open Dashboard
           </Link>
           <Link
-            href="/editor/new"
+            href="/editor/new?template=blank"
             className="px-8 py-4 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-lg transition-colors text-center"
           >
             Start Creating
