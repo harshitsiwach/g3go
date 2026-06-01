@@ -2,12 +2,183 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
+import { Loader2, AlertTriangle, Terminal } from 'lucide-react';
 import Link from 'next/link';
 import { EditorToolbar } from '@/components/editor-toolbar';
 import { FileTree } from '@/components/file-tree';
 import { Web3Panel } from '@/components/Web3Panel';
 import type { GodotEngineInstance } from '@/lib/godot-engine-types';
+
+// ------------------------------------------------------------
+// Module-level engine cache.
+//
+// React 19 strict mode (and any future concurrent render) double-invokes
+// useEffect. The Godot runtime is a *singleton* in disguise — its init() uses
+// closure-level state (the loaded wasm bytes, the init promise) that is shared
+// across every `new Engine()` call. If we create two Engine instances and
+// call init() on both, the first one's promise chain sets `instance.g` only
+// for the first instance. The second instance ends up with `g === null` and
+// the engine then throws "The engine must be initialized before it can be
+// started" — which is misleading; the real cause is that init's chain
+// rejected (e.g. a missing .side.wasm, a Wasm compile failure, or an
+// IndexedDB init failure).
+//
+// We solve it by:
+//   1. Caching the engine instance at module scope (one per page load).
+//   2. Making the init promise cached too — the second call gets the same
+//      promise as the first and sees the same result.
+//   3. NOT tearing the engine down on React unmount, since the user can
+//      navigate to the editor, leave, and come back. The engine survives
+//      until the tab is closed (handled by the browser's process exit).
+// ------------------------------------------------------------
+let engineCache: {
+  instance: GodotEngineInstance;
+  initPromise: Promise<GodotEngineInstance>;
+} | null = null;
+
+let scriptTagPromise: Promise<void> | null = null;
+
+function ensureScriptLoaded(src: string): Promise<void> {
+  if (scriptTagPromise) return scriptTagPromise;
+  scriptTagPromise = new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector(
+      `script[data-godot-runtime="${src}"]`,
+    );
+    if (existing) {
+      resolve();
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = false;
+    s.dataset.godotRuntime = src;
+    s.onload = () => resolve();
+    s.onerror = () =>
+      reject(new Error(`Failed to load runtime script: ${src}`));
+    document.head.appendChild(s);
+  });
+  return scriptTagPromise;
+}
+
+async function loadAndInitEngine(
+  executable: string,
+  canvas: HTMLCanvasElement,
+  onProgress?: (loaded: number, total: number) => void,
+  onPrintError?: (...args: unknown[]) => void,
+  onPrint?: (...args: unknown[]) => void,
+): Promise<GodotEngineInstance> {
+  if (engineCache) return engineCache.initPromise;
+
+  const initPromise = (async () => {
+    // 1. Load the runtime script (registers window.Engine)
+    const scriptPath = `${executable}.js`;
+    await ensureScriptLoaded(scriptPath);
+
+    const Engine = window.Engine;
+    if (!Engine) {
+      throw new Error(
+        `window.Engine is not defined after loading ${scriptPath}. ` +
+          'The Godot runtime script did not register the Engine class.',
+      );
+    }
+
+    // 2. Construct the engine instance
+    const engine = new Engine({
+      executable,
+      canvas,
+      canvasResizePolicy: 0,
+      focusCanvas: true,
+      experimentalVK: false,
+      persistentDrops: true,
+      onProgress,
+      onPrint,
+      onPrintError,
+    });
+
+    // 3. Init — wraps the engine's init() in a try/catch that surfaces the
+    //    *real* underlying error. The engine's internal start() will throw a
+    //    generic "must be initialized" message if init's chain rejected, so
+    //    we capture the underlying error here and re-throw with context.
+    try {
+      await engine.init(executable);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Godot runtime init failed: ${msg}. ` +
+          'This usually means a Wasm file failed to fetch, the Wasm binary ' +
+          'failed to compile, or the IndexedDB-backed VFS could not be ' +
+          'initialized. Check the browser console for `[Godot]` lines.',
+      );
+    }
+
+    if (!(engine as any).g && !(engine as any).getModuleProperty) {
+      // Defensive: if the engine's internal `g` is still null after init()
+      // resolved, the chain rejected silently. This is what causes the
+      // misleading "must be initialized" error from start().
+      throw new Error(
+        'Godot runtime init resolved but the engine instance is not ' +
+          'initialised. This is a known issue when init() fails silently ' +
+          '(e.g. .side.wasm 404, IndexedDB blocked, or Wasm compile error). ' +
+          'Open DevTools Network tab and look for failed /godot-wasm/* ' +
+          'requests, then check the console for [Godot] errors.',
+      );
+    }
+
+    engineCache = { instance: engine, initPromise: Promise.resolve(engine) };
+    return engine;
+  })();
+
+  // Store the promise immediately so a second concurrent call awaits the
+  // same one. The instance is only filled in if the chain succeeds.
+  engineCache = { instance: null as unknown as GodotEngineInstance, initPromise };
+
+  try {
+    const engine = await initPromise;
+    engineCache = { instance: engine, initPromise: Promise.resolve(engine) };
+    return engine;
+  } catch (err) {
+    // Reset cache so a retry can attempt a fresh init.
+    engineCache = null;
+    throw err;
+  }
+}
+
+async function preflightAssets(executable: string): Promise<{
+  ok: boolean;
+  missing: string[];
+}> {
+  // Strict preflight: only fail on files the runtime is *guaranteed* to
+  // request. Optional files (.side.wasm, audio worklets) are reported in
+  // the UI if missing but don't block — the binary may or may not request
+  // them depending on its compile-time flags.
+  const baseUrl = executable.replace(/\/[^/]+$/, '');
+  const required = [`${executable}.js`, `${executable}.wasm`];
+  const optional = [
+    `${executable}.side.wasm`,
+    `${executable}.audio.worklet.js`,
+    `${executable}.audio.position.worklet.js`,
+  ];
+  const check = async (path: string): Promise<{ url: string; status: number | string }> => {
+    const url = path.startsWith('http')
+      ? path
+      : `${baseUrl}/${path.replace(baseUrl + '/', '')}`;
+    try {
+      const res = await fetch(url, { method: 'HEAD' });
+      return { url, status: res.status };
+    } catch (err) {
+      return { url, status: err instanceof Error ? err.message : 'fetch failed' };
+    }
+  };
+  const requiredResults = await Promise.all(required.map(check));
+  const optionalResults = await Promise.all(optional.map(check));
+  const missing = requiredResults
+    .filter((r) => typeof r.status !== 'number' || r.status >= 400)
+    .map((r) => `${r.url} → ${r.status}`);
+  const optionalMissing = optionalResults
+    .filter((r) => typeof r.status !== 'number' || r.status >= 400)
+    .map((r) => `${r.url} → ${r.status}`);
+  return { ok: missing.length === 0, missing: [...missing, ...optionalMissing] };
+}
 
 export default function EditorPage() {
   const params = useParams();
@@ -19,109 +190,102 @@ export default function EditorPage() {
   const engineRef = useRef<GodotEngineInstance | null>(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
-  const [loadingMessage, setLoadingMessage] = useState('Loading Godot Editor...');
+  const [loadingMessage, setLoadingMessage] = useState('Loading Godot Editor…');
   const [error, setError] = useState<string | null>(null);
+  const [missingAssets, setMissingAssets] = useState<string[]>([]);
+  const [engineLogs, setEngineLogs] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | undefined>();
 
+  const appendLog = useCallback((line: string) => {
+    setEngineLogs((prev) => {
+      const next = [...prev, line];
+      return next.length > 30 ? next.slice(next.length - 30) : next;
+    });
+  }, []);
+
   const initEngine = useCallback(async () => {
+    if (engineRef.current) return;
+
+    if (!canvasRef.current) {
+      setError('Canvas element is not mounted yet — cannot start engine.');
+      setLoading(false);
+      return;
+    }
+
+    const executable = '/godot-wasm/godot.editor';
+
     try {
       setLoading(true);
-      setProgress(10);
-      setLoadingMessage('Checking editor assets...');
+      setProgress(5);
+      setLoadingMessage('Checking editor assets…');
 
-      // Check if Godot Wasm assets exist
-      const checkAssets = async () => {
-        try {
-          const response = await fetch('/godot-wasm/godot.editor.js', { method: 'HEAD' });
-          return response.ok;
-        } catch {
-          return false;
-        }
-      };
-
-      const assetsExist = await checkAssets();
-
-      if (!assetsExist) {
+      // Preflight: every required file reachable?
+      const preflight = await preflightAssets(executable);
+      if (!preflight.ok) {
+        setMissingAssets(preflight.missing);
+        setError(
+          `Required Wasm assets are missing or unreachable:\n${preflight.missing.join('\n')}`,
+        );
         setLoading(false);
-        setProgress(100);
         return;
       }
 
-      // Dynamically load the Godot engine script
-      setLoadingMessage('Loading engine script...');
-      setProgress(20);
+      setProgress(15);
+      setLoadingMessage('Loading engine script…');
 
-      const script = document.createElement('script');
-      script.src = '/godot-wasm/godot.editor.js';
-
-      await new Promise<void>((resolve, reject) => {
-        script.onload = () => resolve();
-        script.onerror = () => reject(new Error('Failed to load Godot engine script'));
-        document.head.appendChild(script);
-      });
-
-      setProgress(40);
-      setLoadingMessage('Initializing engine...');
-
-      if (!window.Engine) {
-        throw new Error('Godot Engine class not found');
-      }
-
-      // Create engine instance
-      const engine = new window.Engine({
-        executable: '/godot-wasm/godot.editor',
-        canvas: canvasRef.current,
-        experimentalVK: false,
-        focusCanvas: true,
-        canvasResizePolicy: 0,
-        persistentDrops: true,
-        onProgress: (loaded: number, total: number) => {
+      const engine = await loadAndInitEngine(
+        executable,
+        canvasRef.current,
+        (loaded, total) => {
           if (total > 0) {
             const pct = Math.round((loaded / total) * 100);
-            setProgress(40 + Math.round(pct * 0.5));
+            setProgress(15 + Math.round(pct * 0.6));
           }
         },
-        onPrintError: (...args: unknown[]) => {
+        (...args) => {
+          const line = args
+            .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
+            .join(' ');
+          appendLog(`[err] ${line}`);
           console.error('[Godot]', ...args);
         },
-      });
-
-      setProgress(50);
-      setLoadingMessage('Loading engine binary...');
-
-      // Initialize the engine (loads wasm)
-      await engine.init('/godot-wasm/godot.editor');
+        (...args) => {
+          const line = args
+            .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
+            .join(' ');
+          appendLog(line);
+        },
+      );
 
       engineRef.current = engine;
       setProgress(80);
+      setLoadingMessage('Engine ready');
 
-      // If importing, fetch the ZIP and inject it into the VFS
       if (shouldImport) {
-        setLoadingMessage('Importing project...');
+        setLoadingMessage('Importing project…');
         setProgress(85);
-
         try {
           const zipResponse = await fetch(`/api/projects/${projectId}/import-zip`);
           if (zipResponse.ok) {
             const zipBuffer = await zipResponse.arrayBuffer();
             setProgress(90);
-            setLoadingMessage('Extracting project files...');
-
-            // Inject ZIP into Godot's virtual filesystem
+            setLoadingMessage('Extracting project files…');
             engine.copyToFS('/tmp/preload.zip', new Uint8Array(zipBuffer));
-
             setProgress(95);
-            setLoadingMessage('Starting editor...');
+            setLoadingMessage('Starting editor…');
           }
         } catch (importErr) {
-          console.warn('ZIP import failed, starting editor normally:', importErr);
+          appendLog(
+            `[warn] ZIP import failed, starting editor normally: ${
+              importErr instanceof Error ? importErr.message : 'unknown'
+            }`,
+          );
         }
       }
 
       setProgress(98);
-      setLoadingMessage('Starting Godot Editor...');
+      setLoadingMessage('Starting Godot Editor…');
 
-      // Start the editor - use --project-manager for imports, or direct for existing projects
       const args = shouldImport
         ? ['--project-manager', '--single-window']
         : ['--editor', '--path', '/home/web_user'];
@@ -131,21 +295,19 @@ export default function EditorPage() {
       setProgress(100);
       setLoading(false);
 
-      // Clear the import query parameter
       if (shouldImport) {
         router.replace(`/editor/${projectId}`);
       }
     } catch (err) {
-      console.error('Engine init failed:', err);
-      setError(`Failed to start Godot editor: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      appendLog(`[fatal] ${msg}`);
+      setError(msg);
       setLoading(false);
     }
-  }, [projectId, shouldImport, router]);
+  }, [projectId, shouldImport, router, appendLog]);
 
   useEffect(() => {
     if (projectId === 'new') {
-      // Guest flow: hit the API, get a real id, swap into the editor.
-      // We do not require login — the server defaults to user-1.
       const search = typeof window !== 'undefined' ? window.location.search : '';
       const params = new URLSearchParams(search);
       const template = params.get('template') || 'blank';
@@ -172,17 +334,21 @@ export default function EditorPage() {
       return;
     }
 
-    initEngine();
+    // If the engine is already running (from a previous mount — including
+    // React 19 strict-mode's double-invoke), wire up our ref to it and skip
+    // reinitialisation. The engine survives across navigations and
+    // re-renders within the same tab.
+    if (engineCache) {
+      engineRef.current = engineCache.instance;
+      setProgress(100);
+      setLoading(false);
+      return;
+    }
 
-    return () => {
-      if (engineRef.current) {
-        try {
-          engineRef.current.requestQuit();
-        } catch {
-          // Ignore cleanup errors
-        }
-      }
-    };
+    void initEngine();
+    // NOTE: no cleanup. The engine is intentionally kept alive across React
+    // re-renders and route navigations within the same tab. See the module
+    // comment above for why.
   }, [projectId, initEngine, router]);
 
   const handleSave = async () => {
@@ -192,9 +358,6 @@ export default function EditorPage() {
       return;
     }
     try {
-      // Try to read the project zip from the runtime's VFS. If the runtime
-      // exposes `readFileFromFS` (added by the export template build), use
-      // it; otherwise fall back to fetching the most recent server copy.
       let bytes: ArrayBuffer | undefined;
       const readFile = (engine as any).readFileFromFS?.bind(engine);
       if (readFile) {
@@ -204,7 +367,6 @@ export default function EditorPage() {
         }
       }
       if (!bytes) {
-        // Fall back to the most recent server copy
         const res = await fetch(`/api/projects/${projectId}/import-zip`);
         if (!res.ok) {
           alert('Project saved to browser storage (no zip to upload).');
@@ -241,10 +403,7 @@ export default function EditorPage() {
       />
 
       <div className="flex-1 flex overflow-hidden">
-        <FileTree
-          onFileSelect={handleFileSelect}
-          selectedFile={selectedFile}
-        >
+        <FileTree onFileSelect={handleFileSelect} selectedFile={selectedFile}>
           <Web3Panel />
         </FileTree>
 
@@ -260,14 +419,50 @@ export default function EditorPage() {
                 />
               </div>
               <p className="text-gray-500 text-sm mt-2">{progress}%</p>
+              {engineLogs.length > 0 && (
+                <details className="mt-6 max-w-2xl w-full px-4 text-left">
+                  <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 flex items-center gap-1">
+                    <Terminal className="w-3 h-3" /> engine output ({engineLogs.length})
+                  </summary>
+                  <pre className="mt-2 text-xs text-gray-500 font-mono whitespace-pre-wrap max-h-40 overflow-y-auto bg-gray-950 p-2 rounded">
+                    {engineLogs.join('\n')}
+                  </pre>
+                </details>
+              )}
             </div>
           )}
 
           {error && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 z-10">
-              <div className="text-red-500 text-6xl mb-4">!</div>
-              <h2 className="text-xl font-semibold text-white mb-2">Failed to Load Editor</h2>
-              <p className="text-gray-400 mb-6 text-center max-w-md">{error}</p>
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 z-10 p-6 overflow-y-auto">
+              <AlertTriangle className="w-16 h-16 text-red-500 mb-4" />
+              <h2 className="text-xl font-semibold text-white mb-2">
+                Failed to Load Editor
+              </h2>
+              <pre className="text-red-300 mb-4 text-center max-w-2xl whitespace-pre-wrap font-mono text-sm">
+                {error}
+              </pre>
+              {missingAssets.length > 0 && (
+                <div className="mb-4 text-left max-w-2xl w-full">
+                  <p className="text-gray-300 text-sm font-semibold mb-2">
+                    Missing or unreachable assets:
+                  </p>
+                  <ul className="text-xs text-gray-400 font-mono space-y-1 bg-gray-950 p-3 rounded">
+                    {missingAssets.map((m, i) => (
+                      <li key={i}>• {m}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {engineLogs.length > 0 && (
+                <details className="mb-4 text-left max-w-2xl w-full">
+                  <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 flex items-center gap-1">
+                    <Terminal className="w-3 h-3" /> engine output ({engineLogs.length})
+                  </summary>
+                  <pre className="mt-2 text-xs text-gray-500 font-mono whitespace-pre-wrap max-h-60 overflow-y-auto bg-gray-950 p-3 rounded">
+                    {engineLogs.join('\n')}
+                  </pre>
+                </details>
+              )}
               <div className="flex gap-3">
                 <button
                   onClick={() => window.location.reload()}
