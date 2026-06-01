@@ -4,9 +4,11 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Gamepad2, Loader2 } from 'lucide-react';
+import { useAuth } from '@/lib/auth-context';
 
 export default function SignupPage() {
   const router = useRouter();
+  const { setSession } = useAuth();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -24,18 +26,18 @@ export default function SignupPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, password }),
       });
-
       const data = await response.json();
-
       if (!data.success) {
         setError(data.error || 'Registration failed');
         return;
       }
-
-      // Store session token
-      localStorage.setItem('sessionToken', data.data.sessionToken);
-      localStorage.setItem('user', JSON.stringify(data.data.user));
-
+      setSession(data.data.sessionToken, {
+        id: data.data.user.id,
+        email: data.data.user.email,
+        name: data.data.user.name,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
       router.push('/dashboard');
     } catch (err) {
       setError('Network error. Please try again.');
@@ -77,7 +79,6 @@ export default function SignupPage() {
                 className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-brand-500"
               />
             </div>
-
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">Email</label>
               <input
@@ -89,7 +90,6 @@ export default function SignupPage() {
                 className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-brand-500"
               />
             </div>
-
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">Password</label>
               <input

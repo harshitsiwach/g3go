@@ -11,14 +11,22 @@
   },
   "dependencies": {
     "@browser-forge/shared": "workspace:*",
+    "@browser-forge/web3-sdk": "workspace:*",
+    "@solana/wallet-adapter-base": "^0.9.23",
+    "@solana/wallet-adapter-react": "^0.15.36",
+    "@solana/wallet-adapter-wallets": "^0.19.36",
+    "@solana/web3.js": "^1.95.3",
     "@supabase/supabase-js": "^2.49.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "fflate": "^0.8.2",
     "lucide-react": "^0.474.0",
     "next": "^15.3.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tailwind-merge": "^3.0.2",
+    "viem": "^2.21.0",
+    "wagmi": "^2.14.0",
     "zustand": "^5.0.3"
   },
   "devDependencies": {

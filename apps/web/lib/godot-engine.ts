@@ -3,6 +3,10 @@
  * Provides a clean interface for interacting with the Godot Wasm editor
  */
 
+import type { GodotEngineInstance } from './godot-engine-types';
+
+export type { GodotEngineInstance } from './godot-engine-types';
+
 export interface GodotEngineConfig {
   executable: string;
   canvas?: HTMLCanvasElement | null;
@@ -13,20 +17,6 @@ export interface GodotEngineConfig {
   onProgress?: (loaded: number, total: number) => void;
   onPrintError?: (...args: unknown[]) => void;
   onExit?: (exitCode: number) => void;
-}
-
-export interface GodotEngineInstance {
-  init(executable: string): Promise<void>;
-  start(options: { args: string[]; persistentDrops?: boolean }): Promise<void>;
-  preloadFile(url: string, path?: string): Promise<void>;
-  copyToFS(path: string, data: ArrayBuffer | Uint8Array): void;
-  requestQuit(): void;
-}
-
-declare global {
-  interface Window {
-    Engine: new (config: Record<string, unknown>) => GodotEngineInstance;
-  }
 }
 
 export class GodotEngine {

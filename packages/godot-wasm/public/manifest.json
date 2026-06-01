@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "bundles": {
+    "editor": {
+      "executable": "godot.editor",
+      "files": [
+        { "name": "godot.editor.js", "size": 127537, "cached": true },
+        { "name": "godot.editor.wasm", "size": 88024610, "cached": false },
+        { "name": "godot.editor.audio.position.worklet.js", "size": 2973, "cached": true },
+        { "name": "godot.editor.audio.worklet.js", "size": 7298, "cached": true },
+        { "name": "godot.editor.html", "size": 22803, "cached": true },
+        { "name": "service.worker.js", "size": 5821, "cached": true },
+        { "name": "offline.html", "size": 1082, "cached": true }
+      ],
+      "manifest": "manifest.json",
+      "favicon": "favicon.png",
+      "logo": "logo.svg",
+      "source": "https://github.com/dwalter/godotwebgpu/releases"
+    },
+    "template_release": {
+      "executable": "godot.template_release",
+      "files": [
+        { "name": "godot.template_release.js", "size": 131072, "cached": true },
+        { "name": "godot.template_release.wasm", "size": 41943040, "cached": false },
+        { "name": "godot.template_release.audio.position.worklet.js", "size": 4096, "cached": true },
+        { "name": "godot.template_release.audio.worklet.js", "size": 8192, "cached": true }
+      ],
+      "source": "https://github.com/dwalter/godotwebgpu/releases"
+    }
+  },
+  "notes": "Sizes are placeholders; on first build, run `pnpm --filter @browser-forge/godot-wasm download` to pull real binaries from the upstream release and overwrite these numbers."
+}

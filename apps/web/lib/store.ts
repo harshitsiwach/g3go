@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Project, ExportJob } from '@browser-forge/shared';
+import type { Project, ExportArtifact } from '@browser-forge/shared';
 
 interface AppState {
   // Projects
@@ -12,12 +12,12 @@ interface AppState {
   removeProject: (id: string) => void;
 
   // Export jobs
-  exportJobs: ExportJob[];
-  currentExportJob: ExportJob | null;
-  setExportJobs: (jobs: ExportJob[]) => void;
-  setCurrentExportJob: (job: ExportJob | null) => void;
-  addExportJob: (job: ExportJob) => void;
-  updateExportJob: (id: string, updates: Partial<ExportJob>) => void;
+  exportJobs: ExportArtifact[];
+  currentExportJob: ExportArtifact | null;
+  setExportJobs: (jobs: ExportArtifact[]) => void;
+  setCurrentExportJob: (job: ExportArtifact | null) => void;
+  addExportJob: (job: ExportArtifact) => void;
+  updateExportJob: (id: string, updates: Partial<ExportArtifact>) => void;
 
   // UI state
   isLoading: boolean;

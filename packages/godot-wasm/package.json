@@ -1,8 +1,10 @@
 {
   "name": "@browser-forge/godot-wasm",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
-    "download": "echo 'Download Godot Wasm assets from https://github.com/dwalter/godotwebgpu/releases'"
-  }
+    "download": "node ./scripts/download.mjs",
+    "list": "node ./scripts/list.mjs"
+  },
+  "description": "Godot WebGPU Wasm assets used by both the editor and the browser-side export runtime. Both bundles are served from /godot-wasm/ via the Next.js public folder."
 }

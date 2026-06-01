@@ -51,9 +51,10 @@ const defaultFiles: FileNode[] = [
 interface FileTreeProps {
   onFileSelect?: (path: string) => void;
   selectedFile?: string;
+  children?: React.ReactNode;
 }
 
-export function FileTree({ onFileSelect, selectedFile }: FileTreeProps) {
+export function FileTree({ onFileSelect, selectedFile, children }: FileTreeProps) {
   const [files, setFiles] = useState<FileNode[]>(defaultFiles);
 
   return (
@@ -75,6 +76,7 @@ export function FileTree({ onFileSelect, selectedFile }: FileTreeProps) {
           />
         ))}
       </div>
+      {children}
     </div>
   );
 }

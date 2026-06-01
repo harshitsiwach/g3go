@@ -1,224 +1,265 @@
 # BrowserForge
 
-A browser-based game engine where users build games using a Godot-powered editor running in the browser (via WebAssembly), and export WebGL/WebGPU game builds directly — no installs required.
+A browser-based game engine for building **Web3 games** with Godot — no installs required. Build, run, and export games that talk to **Solana** and **EVM chains (Base, Polygon)**, and ship them to the **web, Telegram, X, and Reddit** as self-contained zips.
 
-**Think: "Figma, but for game development"** — fully cloud-native, zero local install.
+> v0.2 — pure-client compute. No Docker. No Redis. No export workers. Your browser does the work.
+
+**Think: "Figma, but for Web3 game development"** — fully browser-native, wallet-first auth, zero server compute.
+
+## What's new in v0.2
+
+- **Exports run in the browser.** The Godot `template_release` Wasm runtime compiles the project on the user's machine and produces a downloadable zip — no server worker, no queue, no Docker.
+- **Wallet-first auth.** Sign in with **Phantom / Solflare / MetaMask / Coinbase / Rabby** via SIWS (Solana) and SIWE (EVM). Email/password is a legacy fallback.
+- **Web3 SDK** ships inside every exported game. One `Web3.connect('solana')` from GDScript connects a wallet, reads balances, signs messages.
+- **Social export presets.** One runtime, six shells: `web`, `telegram`, `x`, `reddit-devvit`, `reddit-host`, `iframe`.
+- **Template gallery** with Web3-onboarding and token-gated starters.
 
 ## Quick Start
 
 ### Prerequisites
-
 - **Node.js 22+** — [Download](https://nodejs.org/)
-- **pnpm 9+** — Install: `npm install -g pnpm`
-- **Docker** (optional) — For export workers and Redis
+- **pnpm 9+** — Install: `npm i -g pnpm`
 
 ### 1. Clone & Install
-
 ```bash
-git clone https://github.com/your-username/browserforge.git
-cd browserforge
+git clone https://github.com/harshitsiwach/g3go.git
+cd g3go
 pnpm install
 ```
 
-### 2. Set Up Environment Variables
-
+### 2. Set up environment variables
 ```bash
-# Frontend
 cp apps/web/.env.example apps/web/.env.local
-
-# Backend
 cp apps/api/.env.example apps/api/.env
 ```
+The defaults work out of the box for local dev. For Supabase, fill in the URL + anon key.
 
-### 3. Start the App
-
+### 3. Download the Godot Wasm assets
 ```bash
-# Start both API + Frontend
+pnpm --filter @browser-forge/godot-wasm download
+```
+This pulls `godot.editor.*` and `godot.template_release.*` from the upstream `dwalter/godotwebgpu` release. If the release URLs aren't live yet, the editor will still load a stub (the build pipeline still works for shells and the web3 SDK).
+
+### 4. Start the dev servers
+```bash
 pnpm dev
 ```
+This runs:
+- **Frontend** at http://localhost:3000
+- **API** at http://localhost:3001
 
-This starts:
-- **Frontend**: http://localhost:3000
-- **API**: http://localhost:3001
+### 5. Sign in & build
+- Go to http://localhost:3000/login
+- Connect a Solana or EVM wallet (Phantom, MetaMask, etc.)
+- Pick a template from the gallery and start building
 
-### 4. Open & Sign In
-
-1. Go to http://localhost:3000
-2. Click **Sign In** (or go to http://localhost:3000/login)
-3. Use demo account:
-   - Email: `demo@browserforge.dev`
-   - Password: `demo123`
-
-### 5. Start Building
-
-- **Create a new project** — Click "New Project" on the dashboard
-- **Import a ZIP** — Click "Import ZIP" and select a Godot project `.zip` file
-- **Open the editor** — Click "Open Editor" on any project
-
-## Running with Docker (Optional)
-
-For Redis (job queue) and full export pipeline:
-
-```bash
-# Start Docker Desktop first, then:
-docker-compose up -d
-
-# This starts:
-# - Redis on port 6379
-# - PostgreSQL on port 5432 (optional)
-```
-
-## Project Structure
+## Architecture
 
 ```
-browserforge/
+┌──────────────────────────────────────────────────────────────┐
+│ User's browser                                                │
+│                                                                │
+│  ┌───────────────┐    ┌─────────────────┐                     │
+│  │  Next.js UI   │    │ Godot Wasm edit │   (88 MB)           │
+│  │  (React 19)   │    │   (editor mode) │                     │
+│  └───────┬───────┘    └────────┬────────┘                     │
+│          │                     │                               │
+│          │   ┌─────────────────▼──────────────┐                │
+│          │   │ IndexedDB Wasm cache (shared)  │                │
+│          │   └─────────────────┬──────────────┘                │
+│          │                     │                               │
+│          │    ┌────────────────▼─────────────┐                │
+│          └───►│  Web3 SDK (Solana + EVM)     │                │
+│               │  Phantom, MetaMask, etc.     │                │
+│               └────────────────┬─────────────┘                │
+│                                │                               │
+│  When user clicks "Export":    │                               │
+│  ┌─────────────────────────────▼────────────┐                 │
+│  │ Godot Wasm export runtime                │   (~50 MB)      │
+│  │ --headless --export-release "Web"        │                 │
+│  │ → reads /project, writes /output/game.pck│                │
+│  └─────────────────────────────┬────────────┘                 │
+│                                │                               │
+│  ┌─────────────────────────────▼────────────┐                 │
+│  │ export-builder.ts                        │                 │
+│  │  • bundles runtime + game.pck            │                 │
+│  │  • injects platform shell (web, TG, X)   │                 │
+│  │  • inlines per-project web3 config       │                 │
+│  │  • produces self-contained .zip          │                 │
+│  └─────────────────────────────┬────────────┘                 │
+│                                │                               │
+│                       browser downloads zip → user hosts it   │
+└────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│ BrowserForge API (Fastify / Node 22)                          │
+│                                                                │
+│  POST /api/auth/wallet/{challenge,verify}    SIWS + SIWE       │
+│  POST /api/auth/{login,register,logout}      email fallback    │
+│  GET/POST /api/projects                       project CRUD     │
+│  PATCH /api/projects/:id/web3                 web3 config     │
+│  POST/GET /api/projects/:id/files             project files   │
+│  POST /api/projects/:id/import-zip            project zip     │
+│  POST /api/export                             analytics only   │
+│                                                                │
+│  NO Docker, NO Redis, NO export workers.                      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Project structure
+
+```
+.
 ├── apps/
-│   ├── web/                    # Next.js 15 frontend
-│   │   ├── app/               # Pages (dashboard, editor, export, auth)
-│   │   ├── components/        # React components
-│   │   ├── lib/               # Utilities, API client, Godot wrapper
-│   │   └── public/            # Static assets (Godot Wasm)
-│   └── api/                    # Fastify backend
-│       ├── src/
-│       │   ├── routes/        # API routes (auth, projects, files, export)
-│       │   ├── workers/       # BullMQ export worker
-│       │   └── db.ts          # SQLite database
-│       └── docker/            # Export worker Dockerfile
+│   ├── web/                       # Next.js 15 frontend
+│   │   ├── app/                   # Pages (dashboard, editor, export, login)
+│   │   ├── components/            # React (Web3Panel, TemplateGallery, etc.)
+│   │   ├── lib/                   # Auth context, runtime wrappers, export builder
+│   │   │   ├── godot-runtime.ts   # Unified Wasm runtime (editor + export)
+│   │   │   ├── godot-export.ts    # In-browser export runner
+│   │   │   ├── export-builder.ts  # Zip + shell + web3 config bundler
+│   │   │   ├── shells/            # Platform shells (web, telegram, x, ...)
+│   │   │   ├── wasm-cache.ts      # IndexedDB asset cache
+│   │   │   ├── wallet-auth.ts     # SIWS/SIWE flow
+│   │   │   ├── save-sync.ts       # VFS → cloud sync
+│   │   │   └── auth-context.tsx   # React auth provider
+│   │   └── public/                # Static Wasm + web3 SDK assets
+│   └── api/                       # Fastify backend
+│       └── src/routes/            # auth, projects, files, export
 ├── packages/
-│   ├── shared/                 # Shared TypeScript types
-│   └── godot-wasm/            # Godot Wasm assets
-├── infra/                      # Deployment configs
-└── docker-compose.yml         # Local dev infrastructure
+│   ├── shared/                    # Shared types (Project, Web3Config, ...)
+│   ├── web3-sdk/                  # In-game Web3 SDK
+│   │   ├── src/                   # TypeScript source (Solana + EVM providers)
+│   │   ├── dist/web3.js           # UMD bundle shipped with every game
+│   │   └── godot/templates/       # GDScript files to drop into your project
+│   └── godot-wasm/                # Editor + export template Wasm assets (LFS)
+└── docs/
+    └── ARCHITECTURE.md
 ```
 
-## Features
+## Web3 in your game
 
-### Core
-- **Browser-Based Editor** — Full Godot editor via WebAssembly
-- **Project Management** — Create, import, delete projects
-- **ZIP Import** — Import any Godot project as a ZIP file
-- **Export Pipeline** — Export to WebGL, WebGPU, Windows, macOS, Linux
+The Web3 SDK auto-installs as `window.Web3` in every exported game. From GDScript:
 
-### Authentication
-- Session-based auth with register/login/logout
-- Route protection middleware
-- Demo account included
+```gdscript
+# Drop scripts/web3.gd in your project and add it as an autoload called "Web3"
 
-### Storage
-- SQLite database for persistence
-- File storage for project files
-- Ready for S3/Supabase integration
+func _ready() -> void:
+    var res = Web3.connect("solana")
+    if not res.has("error"):
+        print("Connected: ", res.address)
 
-### Infrastructure
-- Docker export workers with Godot headless
-- BullMQ job queue (falls back to simulation without Redis)
-- Fly.io deployment config
+        # Read a balance
+        var bal = Web3.get_balance("solana")
+        print("Balance: ", bal.amount, " (decimals: ", bal.decimals, ")")
 
-## API Endpoints
+        # Sign a message
+        var sign = Web3.sign_message("solana", "Sign in to play")
+        if not sign.has("error"):
+            print("Signature: ", sign.signature)
+```
+
+Bundled with the SDK are three ready-to-use Godot nodes:
+- `WalletConnectButton` — connect/disconnect UI
+- `TokenBalanceLabel` — auto-refreshing balance display
+- `TransactionButton` — prompt a signature
+
+Copy them from `packages/web3-sdk/godot/templates/scripts/` into your project.
+
+## Export targets
+
+| Target | Shell extras | Best for |
+|---|---|---|
+| `web` | OG tags, mobile viewport | Generic hosting (Vercel, Netlify, S3) |
+| `telegram` | Telegram Web App SDK, MainButton, theme sync | Telegram bots / mini apps |
+| `x` | Square aspect ratio, no chrome | X / Twitter embeds |
+| `reddit-devvit` | Devvit manifest + entry | Reddit apps via developers.reddit.com |
+| `reddit-host` | oEmbed discovery | Embedding in normal Reddit posts |
+| `iframe` | Fixed 16:9 wrapper | Blog / docs / CMS embeds |
+
+Same Godot runtime, different `index.html`. The export zip is self-contained — host on any static server.
+
+## API endpoints
 
 ### Auth
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/auth/register` | Create account |
-| POST | `/api/auth/login` | Sign in |
-| POST | `/api/auth/logout` | Sign out |
-| GET | `/api/auth/me` | Get current user |
+|---|---|---|
+| POST | `/api/auth/wallet/challenge` | SIWS/SIWE challenge message |
+| POST | `/api/auth/wallet/verify` | Verify signature, issue session |
+| POST | `/api/auth/login` | Legacy email/password |
+| POST | `/api/auth/register` | Legacy email/password |
+| POST | `/api/auth/logout` | Invalidate session |
+| GET | `/api/auth/me` | Current user |
 
 ### Projects
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/projects` | List all projects |
-| GET | `/api/projects/:id` | Get project |
-| POST | `/api/projects` | Create project |
-| PATCH | `/api/projects/:id` | Update project |
+|---|---|---|
+| GET | `/api/projects` | List user's projects |
+| GET | `/api/projects/:id` | Get project (incl. web3Config, template) |
+| POST | `/api/projects` | Create (with template) |
+| PATCH | `/api/projects/:id` | Update name/description |
+| PATCH | `/api/projects/:id/web3` | Update web3 config |
 | DELETE | `/api/projects/:id` | Delete project |
-
-### Files
-| Method | Endpoint | Description |
-|--------|----------|-------------|
 | GET | `/api/projects/:id/files` | List files |
 | POST | `/api/projects/:id/files` | Upload file |
 | GET | `/api/projects/:id/files/*` | Download file |
-| DELETE | `/api/projects/:id/files/*` | Delete file |
-| POST | `/api/projects/:id/import-zip` | Import ZIP |
-| GET | `/api/projects/:id/import-zip` | Export ZIP |
+| POST | `/api/projects/:id/import-zip` | Upload project zip (for editor) |
+| GET | `/api/projects/:id/import-zip` | Download project zip |
 
 ### Export
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/export` | Start export job |
-| GET | `/api/export/:id` | Get job status |
-| GET | `/api/export?projectId=:id` | List project exports |
+|---|---|---|
+| POST | `/api/export` | Log export event (analytics only — no server work) |
+| GET | `/api/export/:id` | Status (always `completed` for client-side exports) |
+| GET | `/api/export?projectId=:id` | List project's exports |
 
-## Tech Stack
+## Development commands
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS |
-| Backend | Fastify 5, Node.js, TypeScript |
-| Database | SQLite (better-sqlite3) |
-| Job Queue | BullMQ + Redis (optional) |
-| Game Engine | Godot 4.6 WebAssembly |
-| Auth | Custom session-based |
-| Deployment | Vercel (frontend), Fly.io (backend), Docker |
+```bash
+pnpm install              # Install all workspaces
+pnpm dev                  # Run API + frontend
+pnpm dev:web              # Frontend only
+pnpm dev:api              # API only
+pnpm build                # Build all packages
+pnpm typecheck            # TypeScript check all packages
+pnpm lint                 # Lint all packages
 
-## Environment Variables
+# Web3 SDK
+pnpm --filter @browser-forge/web3-sdk build
+pnpm --filter @browser-forge/web3-sdk typecheck
 
-### Frontend (`apps/web/.env.local`)
+# Godot Wasm assets
+pnpm --filter @browser-forge/godot-wasm download   # one-time setup
+pnpm --filter @browser-forge/godot-wasm list       # inspect what's on disk
+```
+
+## Environment variables
+
+### Frontend — `apps/web/.env.local`
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 NEXT_PUBLIC_API_URL=http://localhost:3001
 ```
 
-### Backend (`apps/api/.env`)
+### Backend — `apps/api/.env`
 ```env
 PORT=3001
 HOST=0.0.0.0
-REDIS_URL=redis://localhost:6379
 CORS_ORIGIN=http://localhost:3000
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-## Development Commands
+## How it works (end-to-end)
 
-```bash
-# Install dependencies
-pnpm install
-
-# Start development servers
-pnpm dev              # Both API + Frontend
-pnpm dev:web          # Frontend only (port 3000)
-pnpm dev:api          # Backend only (port 3001)
-
-# Build
-pnpm build            # Build all packages
-
-# Type checking
-pnpm typecheck        # Check all packages
-
-# Linting
-pnpm lint             # Lint all packages
-
-# Database
-# SQLite DB is created automatically at apps/api/data/browserforge.db
-# Delete it to reset: rm apps/api/data/browserforge.db
-```
-
-## How It Works
-
-1. **User visits the website** and signs in
-2. **Creates or imports a project** (ZIP upload)
-3. **Opens the editor** — Godot Wasm loads in the browser
-4. **Edits the game** using the full Godot editor UI
-5. **Exports the game** — Backend runs Godot headless in Docker
-6. **Downloads the build** — WebGL, desktop, or mobile
-
-## Limitations
-
-- Web editor has no C#/Mono support (Godot limitation)
-- No debugging support in web editor
-- Export requires Docker with Godot headless
-- WebGPU not supported in all browsers (WebGL 2.0 fallback available)
+1. **User signs in** with Phantom or MetaMask (SIWS/SIWE). The server returns a session JWT.
+2. **User opens a project** — the Godot Wasm editor fetches the project's source zip from `/api/projects/:id/import-zip` and injects it into the editor's VFS via `engine.copyToFS`.
+3. **User edits** — Godot's internal save writes to its IndexedDB VFS.
+4. **User clicks Save** — `save-sync.ts` reads the project zip from the VFS and uploads it back to the server.
+5. **User clicks Export** — `godot-export.ts` boots the `template_release` Wasm runtime and runs `--headless --export-release "Web" /output/game.pck`. The runtime produces the compiled game on the user's CPU.
+6. **`export-builder.ts`** bundles the compiled game + the Godot runtime + the chosen platform shell + the per-project web3 config into a single zip.
+7. **User downloads the zip** and uploads it to Vercel, Telegram, Reddit, or wherever.
 
 ## License
 

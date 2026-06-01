@@ -5,20 +5,43 @@ import db from '../db.js';
 const ProjectSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
+  template: z.string().max(50).optional(),
+});
+
+const Web3ConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  chains: z.array(z.enum(['solana', 'base', 'polygon'])).default([]),
+  solana: z
+    .object({
+      rpcUrl: z.string().url().optional(),
+      tokenMint: z.string().optional(),
+      programId: z.string().optional(),
+    })
+    .optional(),
+  evm: z
+    .object({
+      chainId: z.number().int().optional(),
+      rpcUrl: z.string().url().optional(),
+      tokenAddress: z.string().optional(),
+    })
+    .optional(),
 });
 
 export async function projectRoutes(fastify: FastifyInstance) {
-  // List all projects
   fastify.get('/', async () => {
-    const projects = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all();
+    const projects = db
+      .prepare('SELECT * FROM projects ORDER BY updated_at DESC')
+      .all() as any[];
     return {
       success: true,
-      data: projects.map((p: any) => ({
+      data: projects.map((p) => ({
         id: p.id,
         name: p.name,
         description: p.description,
         userId: p.user_id,
         thumbnailUrl: p.thumbnail_url,
+        template: p.template ?? 'blank',
+        web3Config: p.web3_config ? JSON.parse(p.web3_config) : null,
         createdAt: p.created_at,
         updatedAt: p.updated_at,
         lastExportedAt: p.last_exported_at,
@@ -26,15 +49,12 @@ export async function projectRoutes(fastify: FastifyInstance) {
     };
   });
 
-  // Get project by ID
   fastify.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
     const { id } = request.params;
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
-
     if (!project) {
       return reply.status(404).send({ success: false, error: 'Project not found' });
     }
-
     return {
       success: true,
       data: {
@@ -43,6 +63,8 @@ export async function projectRoutes(fastify: FastifyInstance) {
         description: project.description,
         userId: project.user_id,
         thumbnailUrl: project.thumbnail_url,
+        template: project.template ?? 'blank',
+        web3Config: project.web3_config ? JSON.parse(project.web3_config) : null,
         createdAt: project.created_at,
         updatedAt: project.updated_at,
         lastExportedAt: project.last_exported_at,
@@ -50,28 +72,32 @@ export async function projectRoutes(fastify: FastifyInstance) {
     };
   });
 
-  // Create new project
   fastify.post('/', async (request, reply) => {
     const body = request.body as any;
     const result = ProjectSchema.safeParse(body);
-
     if (!result.success) {
       return reply.status(400).send({
         success: false,
-        error: result.error.errors.map(e => e.message).join(', '),
+        error: result.error.errors.map((e) => e.message).join(', '),
       });
     }
 
     const id = Date.now().toString();
     const now = new Date().toISOString();
-
     db.prepare(`
-      INSERT INTO projects (id, name, description, user_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(id, result.data.name, result.data.description || '', 'user-1', now, now);
+      INSERT INTO projects (id, name, description, user_id, template, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      result.data.name,
+      result.data.description || '',
+      'user-1',
+      result.data.template || 'blank',
+      now,
+      now,
+    );
 
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
-
     return reply.status(201).send({
       success: true,
       data: {
@@ -80,6 +106,8 @@ export async function projectRoutes(fastify: FastifyInstance) {
         description: project.description,
         userId: project.user_id,
         thumbnailUrl: project.thumbnail_url,
+        template: project.template ?? 'blank',
+        web3Config: null,
         createdAt: project.created_at,
         updatedAt: project.updated_at,
         lastExportedAt: project.last_exported_at,
@@ -87,22 +115,19 @@ export async function projectRoutes(fastify: FastifyInstance) {
     });
   });
 
-  // Update project
   fastify.patch<{ Params: { id: string } }>('/:id', async (request, reply) => {
     const { id } = request.params;
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
-
     if (!project) {
       return reply.status(404).send({ success: false, error: 'Project not found' });
     }
 
     const body = request.body as any;
     const result = ProjectSchema.partial().safeParse(body);
-
     if (!result.success) {
       return reply.status(400).send({
         success: false,
-        error: result.error.errors.map(e => e.message).join(', '),
+        error: result.error.errors.map((e) => e.message).join(', '),
       });
     }
 
@@ -118,13 +143,15 @@ export async function projectRoutes(fastify: FastifyInstance) {
       updates.push('description = ?');
       values.push(result.data.description);
     }
+    if (result.data.template !== undefined) {
+      updates.push('template = ?');
+      values.push(result.data.template);
+    }
 
     values.push(id);
-
     db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 
     const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
-
     return {
       success: true,
       data: {
@@ -133,6 +160,8 @@ export async function projectRoutes(fastify: FastifyInstance) {
         description: updated.description,
         userId: updated.user_id,
         thumbnailUrl: updated.thumbnail_url,
+        template: updated.template ?? 'blank',
+        web3Config: updated.web3_config ? JSON.parse(updated.web3_config) : null,
         createdAt: updated.created_at,
         updatedAt: updated.updated_at,
         lastExportedAt: updated.last_exported_at,
@@ -140,17 +169,38 @@ export async function projectRoutes(fastify: FastifyInstance) {
     };
   });
 
-  // Delete project
-  fastify.delete<{ Params: { id: string } }>('/:id', async (request, reply) => {
+  // PATCH /:id/web3 — update the web3 config (no project body required)
+  fastify.patch<{ Params: { id: string } }>('/:id/web3', async (request, reply) => {
     const { id } = request.params;
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
-
+    const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
     if (!project) {
       return reply.status(404).send({ success: false, error: 'Project not found' });
     }
 
-    db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    const body = request.body as any;
+    const result = Web3ConfigSchema.safeParse(body);
+    if (!result.success) {
+      return reply.status(400).send({
+        success: false,
+        error: result.error.errors.map((e) => e.message).join(', '),
+      });
+    }
 
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE projects SET web3_config = ?, updated_at = ? WHERE id = ?
+    `).run(JSON.stringify(result.data), now, id);
+
+    return { success: true, data: result.data };
+  });
+
+  fastify.delete<{ Params: { id: string } }>('/:id', async (request, reply) => {
+    const { id } = request.params;
+    const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
+    if (!project) {
+      return reply.status(404).send({ success: false, error: 'Project not found' });
+    }
+    db.prepare('DELETE FROM projects WHERE id = ?').run(id);
     return { success: true };
   });
 }

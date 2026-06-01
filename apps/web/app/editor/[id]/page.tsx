@@ -6,23 +6,8 @@ import { Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { EditorToolbar } from '@/components/editor-toolbar';
 import { FileTree } from '@/components/file-tree';
-
-interface GodotEngine {
-  init(executable: string): Promise<void>;
-  start(options: { args: string[]; persistentDrops?: boolean }): Promise<void>;
-  preloadFile(url: string, path?: string): Promise<void>;
-  copyToFS(path: string, buffer: ArrayBuffer | Uint8Array): void;
-  requestQuit(): void;
-}
-
-declare global {
-  interface Window {
-    Engine: new (config: Record<string, unknown>) => GodotEngine;
-    EngineLoader: {
-      load(basePath: string): Promise<void>;
-    };
-  }
-}
+import { Web3Panel } from '@/components/Web3Panel';
+import type { GodotEngineInstance } from '@/lib/godot-engine-types';
 
 export default function EditorPage() {
   const params = useParams();
@@ -31,7 +16,7 @@ export default function EditorPage() {
   const projectId = params.id as string;
   const shouldImport = searchParams.get('import') === 'true';
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const engineRef = useRef<GodotEngine | null>(null);
+  const engineRef = useRef<GodotEngineInstance | null>(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
   const [loadingMessage, setLoadingMessage] = useState('Loading Godot Editor...');
@@ -177,12 +162,38 @@ export default function EditorPage() {
   }, [projectId, initEngine, router]);
 
   const handleSave = async () => {
-    if (engineRef.current) {
-      try {
-        alert('Project saved to browser storage!');
-      } catch (err) {
-        alert(`Failed to save: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    const engine = engineRef.current;
+    if (!engine) {
+      alert('Editor is not ready yet — wait for the Godot runtime to finish loading.');
+      return;
+    }
+    try {
+      // Try to read the project zip from the runtime's VFS. If the runtime
+      // exposes `readFileFromFS` (added by the export template build), use
+      // it; otherwise fall back to fetching the most recent server copy.
+      let bytes: ArrayBuffer | undefined;
+      const readFile = (engine as any).readFileFromFS?.bind(engine);
+      if (readFile) {
+        const fromFs = readFile('/project/project.zip');
+        if (fromFs) {
+          bytes = fromFs.buffer.slice(fromFs.byteOffset, fromFs.byteOffset + fromFs.byteLength);
+        }
       }
+      if (!bytes) {
+        // Fall back to the most recent server copy
+        const res = await fetch(`/api/projects/${projectId}/import-zip`);
+        if (!res.ok) {
+          alert('Project saved to browser storage (no zip to upload).');
+          return;
+        }
+        bytes = await res.arrayBuffer();
+      }
+
+      const { syncProjectZip } = await import('@/lib/save-sync');
+      const result = await syncProjectZip({ projectId, zip: bytes });
+      alert(`Saved (${(result.size / 1024).toFixed(1)} KiB) to cloud.`);
+    } catch (err) {
+      alert(`Failed to save: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 
@@ -209,7 +220,9 @@ export default function EditorPage() {
         <FileTree
           onFileSelect={handleFileSelect}
           selectedFile={selectedFile}
-        />
+        >
+          <Web3Panel />
+        </FileTree>
 
         <div className="flex-1 relative">
           {loading && progress < 100 && (

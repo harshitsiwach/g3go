@@ -3,7 +3,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Plus, Upload, Gamepad2, Clock, MoreVertical, Loader2, Trash2 } from 'lucide-react';
+import { Plus, Upload, Gamepad2, Clock, MoreVertical, Loader2, Trash2, Wallet, Sparkles } from 'lucide-react';
+import { TemplateGallery } from '@/components/TemplateGallery';
 import type { Project } from '@browser-forge/shared';
 
 export default function DashboardPage() {
@@ -11,6 +12,7 @@ export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNewModal, setShowNewModal] = useState(false);
+  const [showTemplateGallery, setShowTemplateGallery] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState('');
@@ -42,17 +44,16 @@ export default function DashboardPage() {
 
   const handleCreateProject = async () => {
     if (!newProjectName.trim()) return;
+    await createProject('', newProjectName.trim());
+  };
 
+  const createProject = async (template: string, name: string) => {
     try {
       const response = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: newProjectName.trim(),
-          description: '',
-        }),
+        body: JSON.stringify({ name, description: '', template }),
       });
-
       const data = await response.json();
       if (data.success) {
         const newProject = {
@@ -64,6 +65,8 @@ export default function DashboardPage() {
         setNewProjectName('');
         setShowNewModal(false);
         router.push(`/editor/${newProject.id}`);
+      } else {
+        alert(data.error || 'Failed to create project');
       }
     } catch (err) {
       console.error('Failed to create project:', err);
@@ -180,7 +183,7 @@ export default function DashboardPage() {
               className="hidden"
             />
             <button
-              onClick={() => setShowNewModal(true)}
+              onClick={() => setShowTemplateGallery(true)}
               className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded-lg transition-colors"
             >
               <Plus className="w-5 h-5" />
@@ -200,8 +203,16 @@ export default function DashboardPage() {
                 key={project.id}
                 className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden hover:border-gray-600 transition-colors"
               >
-                <div className="h-40 bg-gradient-to-br from-brand-900/50 to-brand-800/30 flex items-center justify-center">
+                <div className="h-40 bg-gradient-to-br from-brand-900/50 to-brand-800/30 flex items-center justify-center relative">
                   <Gamepad2 className="w-16 h-16 text-brand-400/50" />
+                  {project.web3Config?.enabled && (
+                    <div className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 rounded bg-black/40 backdrop-blur">
+                      <Wallet className="w-3 h-3 text-brand-400" />
+                      <span className="text-xs text-brand-300">
+                        {project.web3Config.chains.join(' + ')}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <div className="p-4">
                   <div className="flex items-start justify-between">
@@ -261,15 +272,22 @@ export default function DashboardPage() {
                 Import ZIP
               </button>
               <button
-                onClick={() => setShowNewModal(true)}
+                onClick={() => setShowTemplateGallery(true)}
                 className="px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded-lg transition-colors"
               >
-                Create Project
+                <Sparkles className="w-5 h-5 inline mr-2" />
+                New from template
               </button>
             </div>
           </div>
         )}
       </div>
+
+      <TemplateGallery
+        open={showTemplateGallery}
+        onClose={() => setShowTemplateGallery(false)}
+        onCreate={createProject}
+      />
 
       {showNewModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">

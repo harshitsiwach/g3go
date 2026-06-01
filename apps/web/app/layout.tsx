@@ -1,9 +1,11 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { AuthProvider } from '@/lib/auth-context';
+import { RouteGuard } from '@/lib/route-guard';
 
 export const metadata: Metadata = {
-  title: 'BrowserForge - Cloud Game Engine',
-  description: 'Build games in your browser with Godot-powered editor',
+  title: 'BrowserForge — Build Web3 games in your browser',
+  description: 'A browser-based Godot engine for building WebGL/WebGPU games with on-chain features. No installs required.',
 };
 
 export default function RootLayout({
@@ -13,7 +15,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AuthProvider>
+          <RouteGuard>{children}</RouteGuard>
+        </AuthProvider>
+      </body>
     </html>
   );
 }

@@ -1,0 +1,46 @@
+## Sample scene demonstrating the Web3 nodes wired together. Open this
+## scene in the Godot editor to see how the components are arranged.
+##
+## This file is intentionally a text-format Godot scene. You can drop it
+## into any project as scenes/web3_demo.tscn and it will open in the
+## browser-based editor (or any Godot 4.x editor for reference).
+
+[gd_scene load_steps=4 format=3 uid="uid://bf_web3_demo"]
+
+[ext_resource type="Script" path="res://scripts/web3.gd" id="1_web3"]
+[ext_resource type="Script" path="res://scripts/wallet_connect_button.gd" id="2_wcb"]
+[ext_resource type="Script" path="res://scripts/token_balance_label.gd" id="3_tbl"]
+
+[node name="Web3Demo" type="Control"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Web3" type="Node" parent="."]
+script = ExtResource("1_web3")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -160.0
+offset_top = -100.0
+offset_right = 160.0
+offset_bottom = 100.0
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="VBox"]
+text = "Web3 Demo"
+horizontal_alignment = 1
+
+[node name="ConnectButton" type="Button" parent="VBox"]
+custom_minimum_size = Vector2(0, 40)
+text = "Connect Solana"
+script = ExtResource("2_wcb")
+chain = "solana"
+
+[node name="Balance" type="Label" parent="VBox"]
+text = "—"
+horizontal_alignment = 1
+script = ExtResource("3_tbl")
+chain = "solana"
