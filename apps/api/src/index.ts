@@ -4,6 +4,7 @@ import multipart from '@fastify/multipart';
 import { projectRoutes } from './routes/projects.js';
 import { exportRoutes } from './routes/export.js';
 import { authRoutes } from './routes/auth.js';
+import { assetRoutes } from './routes/assets.js';
 
 const server = Fastify({
   logger: {
@@ -35,6 +36,7 @@ await server.register(multipart, {
 await server.register(authRoutes, { prefix: '/api/auth' });
 await server.register(projectRoutes, { prefix: '/api/projects' });
 await server.register(exportRoutes, { prefix: '/api/export' });
+await server.register(assetRoutes, { prefix: '/api/assets' });
 
 // Health check
 server.get('/api/health', async () => {

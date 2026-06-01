@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Loader2, AlertTriangle, Terminal } from 'lucide-react';
+import { Loader2, AlertTriangle, Terminal, Download } from 'lucide-react';
 import Link from 'next/link';
 import { EditorToolbar } from '@/components/editor-toolbar';
 import { FileTree } from '@/components/file-tree';
@@ -12,25 +12,6 @@ import type { GodotEngineInstance } from '@/lib/godot-engine-types';
 
 // ------------------------------------------------------------
 // Module-level engine cache.
-//
-// React 19 strict mode (and any future concurrent render) double-invokes
-// useEffect. The Godot runtime is a *singleton* in disguise — its init() uses
-// closure-level state (the loaded wasm bytes, the init promise) that is shared
-// across every `new Engine()` call. If we create two Engine instances and
-// call init() on both, the first one's promise chain sets `instance.g` only
-// for the first instance. The second instance ends up with `g === null` and
-// the engine then throws "The engine must be initialized before it can be
-// started" — which is misleading; the real cause is that init's chain
-// rejected (e.g. a missing .side.wasm, a Wasm compile failure, or an
-// IndexedDB init failure).
-//
-// We solve it by:
-//   1. Caching the engine instance at module scope (one per page load).
-//   2. Making the init promise cached too — the second call gets the same
-//      promise as the first and sees the same result.
-//   3. NOT tearing the engine down on React unmount, since the user can
-//      navigate to the editor, leave, and come back. The engine survives
-//      until the tab is closed (handled by the browser's process exit).
 // ------------------------------------------------------------
 let engineCache: {
   instance: GodotEngineInstance;
@@ -71,7 +52,6 @@ async function loadAndInitEngine(
   if (engineCache) return engineCache.initPromise;
 
   const initPromise = (async () => {
-    // 1. Load the runtime script (registers window.Engine)
     const scriptPath = `${executable}.js`;
     await ensureScriptLoaded(scriptPath);
 
@@ -83,7 +63,6 @@ async function loadAndInitEngine(
       );
     }
 
-    // 2. Construct the engine instance
     const engine = new Engine({
       executable,
       canvas,
@@ -96,10 +75,6 @@ async function loadAndInitEngine(
       onPrintError,
     });
 
-    // 3. Init — wraps the engine's init() in a try/catch that surfaces the
-    //    *real* underlying error. The engine's internal start() will throw a
-    //    generic "must be initialized" message if init's chain rejected, so
-    //    we capture the underlying error here and re-throw with context.
     try {
       await engine.init(executable);
     } catch (err) {
@@ -113,9 +88,6 @@ async function loadAndInitEngine(
     }
 
     if (!(engine as any).g && !(engine as any).getModuleProperty) {
-      // Defensive: if the engine's internal `g` is still null after init()
-      // resolved, the chain rejected silently. This is what causes the
-      // misleading "must be initialized" error from start().
       throw new Error(
         'Godot runtime init resolved but the engine instance is not ' +
           'initialised. This is a known issue when init() fails silently ' +
@@ -129,8 +101,6 @@ async function loadAndInitEngine(
     return engine;
   })();
 
-  // Store the promise immediately so a second concurrent call awaits the
-  // same one. The instance is only filled in if the chain succeeds.
   engineCache = { instance: null as unknown as GodotEngineInstance, initPromise };
 
   try {
@@ -138,7 +108,6 @@ async function loadAndInitEngine(
     engineCache = { instance: engine, initPromise: Promise.resolve(engine) };
     return engine;
   } catch (err) {
-    // Reset cache so a retry can attempt a fresh init.
     engineCache = null;
     throw err;
   }
@@ -148,7 +117,6 @@ async function preflightAssets(executable: string): Promise<{
   ok: boolean;
   missing: string[];
 }> {
-  // Required files: .js (script), .wasm (binary), and .pck (editor asset pack)
   const required = [`${executable}.js`, `${executable}.wasm`, `${executable}.pck`];
   const optional = [
     `${executable}.side.wasm`,
@@ -157,8 +125,6 @@ async function preflightAssets(executable: string): Promise<{
   ];
   
   const check = async (path: string): Promise<{ url: string; status: number | string }> => {
-    // Since the paths are absolute from the webroot (e.g. /godot-wasm/godot.editor.js),
-    // we can request them directly without complex string replacements.
     try {
       const res = await fetch(path, { method: 'HEAD' });
       return { url: path, status: res.status };
@@ -198,6 +164,12 @@ export default function EditorPage() {
   const [engineLogs, setEngineLogs] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | undefined>();
 
+  // Automatic asset downloader state
+  const [downloadingAssets, setDownloadingAssets] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadLabel, setDownloadLabel] = useState('');
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
   const appendLog = useCallback((line: string) => {
     setEngineLogs((prev) => {
       const next = [...prev, line];
@@ -230,7 +202,7 @@ export default function EditorPage() {
         let errMsg = `Required Wasm assets are missing or unreachable:\n${preflight.missing.join('\n')}`;
         if (hasPckMissing) {
           errMsg += `\n\n[CRITICAL ERROR] The Godot Editor pack file (.pck) is missing from public/godot-wasm/.\n` +
-            `To resolve this, please run the following command in your project directory to download the editor assets:\n\n` +
+            `To resolve this, you can click "Download Assets Automatically" below, or run the following command in your terminal:\n\n` +
             `pnpm --filter @browser-forge/godot-wasm download\n\n` +
             `After downloading, refresh this page to launch the editor.`;
         }
@@ -315,6 +287,49 @@ export default function EditorPage() {
     }
   }, [projectId, shouldImport, router, appendLog, fetchWithAuth]);
 
+  const startAssetDownload = async () => {
+    setDownloadingAssets(true);
+    setDownloadProgress(0);
+    setDownloadLabel('Initializing download...');
+    setDownloadError(null);
+
+    try {
+      const res = await fetch('/api/assets/download-wasm', { method: 'POST' });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Failed to start download');
+
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch('/api/assets/download-status');
+          const statusData = await statusRes.json();
+
+          setDownloadProgress(statusData.progress);
+          setDownloadLabel(statusData.label || 'Downloading...');
+
+          if (statusData.error) {
+            clearInterval(pollInterval);
+            setDownloadError(statusData.error);
+            setDownloadingAssets(false);
+          } else if (statusData.progress >= 100) {
+            clearInterval(pollInterval);
+            setDownloadLabel('Assets successfully installed! Reloading editor...');
+            setTimeout(() => {
+              setDownloadingAssets(false);
+              setError(null);
+              setMissingAssets([]);
+              void initEngine();
+            }, 1500);
+          }
+        } catch (pollErr) {
+          console.error('Failed to poll download status:', pollErr);
+        }
+      }, 1000);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'Failed to start download');
+      setDownloadingAssets(false);
+    }
+  };
+
   useEffect(() => {
     if (projectId === 'new') {
       const search = typeof window !== 'undefined' ? window.location.search : '';
@@ -343,10 +358,6 @@ export default function EditorPage() {
       return;
     }
 
-    // If the engine is already running (from a previous mount — including
-    // React 19 strict-mode's double-invoke), wire up our ref to it and skip
-    // reinitialisation. The engine survives across navigations and
-    // re-renders within the same tab.
     if (engineCache) {
       engineRef.current = engineCache.instance;
       setProgress(100);
@@ -355,9 +366,6 @@ export default function EditorPage() {
     }
 
     void initEngine();
-    // NOTE: no cleanup. The engine is intentionally kept alive across React
-    // re-renders and route navigations within the same tab. See the module
-    // comment above for why.
   }, [projectId, initEngine, router, fetchWithAuth]);
 
   const handleSave = async () => {
@@ -450,7 +458,42 @@ export default function EditorPage() {
               <pre className="text-red-300 mb-4 text-center max-w-2xl whitespace-pre-wrap font-mono text-sm">
                 {error}
               </pre>
-              {missingAssets.length > 0 && (
+              
+              {missingAssets.some(m => m.includes('.pck')) && (
+                <div className="mb-6 p-5 bg-brand-500/10 border border-brand-500/30 rounded-xl max-w-xl text-center">
+                  <p className="text-brand-300 font-medium text-sm mb-3">
+                    The Godot Editor asset pack (.pck) is missing or could not be loaded.
+                  </p>
+                  
+                  {downloadingAssets ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-center gap-2 text-white text-xs">
+                        <Loader2 className="w-4 h-4 animate-spin text-brand-400" />
+                        <span>{downloadLabel}</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-brand-500 transition-all duration-300"
+                          style={{ width: `${downloadProgress}%` }}
+                        />
+                      </div>
+                      <span className="text-xs text-gray-400 font-mono">{downloadProgress}%</span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={startAssetDownload}
+                      className="px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2 mx-auto"
+                    >
+                      <Download className="w-4 h-4" /> Download Assets Automatically
+                    </button>
+                  )}
+                  {downloadError && (
+                    <p className="text-xs text-red-400 mt-2 font-mono">Error: {downloadError}</p>
+                  )}
+                </div>
+              )}
+
+              {missingAssets.length > 0 && !downloadingAssets && (
                 <div className="mb-4 text-left max-w-2xl w-full">
                   <p className="text-gray-300 text-sm font-semibold mb-2">
                     Missing or unreachable assets:
@@ -462,7 +505,7 @@ export default function EditorPage() {
                   </ul>
                 </div>
               )}
-              {engineLogs.length > 0 && (
+              {engineLogs.length > 0 && !downloadingAssets && (
                 <details className="mb-4 text-left max-w-2xl w-full">
                   <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 flex items-center gap-1">
                     <Terminal className="w-3 h-3" /> engine output ({engineLogs.length})
@@ -475,7 +518,8 @@ export default function EditorPage() {
               <div className="flex gap-3">
                 <button
                   onClick={() => window.location.reload()}
-                  className="px-6 py-2 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded-lg transition-colors"
+                  disabled={downloadingAssets}
+                  className="px-6 py-2 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
                 >
                   Try Again
                 </button>
