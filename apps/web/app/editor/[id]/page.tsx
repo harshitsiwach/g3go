@@ -117,7 +117,7 @@ async function preflightAssets(executable: string): Promise<{
   ok: boolean;
   missing: string[];
 }> {
-  const required = [`${executable}.js`, `${executable}.wasm`, `${executable}.pck`];
+  const required = [`${executable}.js`, `${executable}.wasm`];
   const optional = [
     `${executable}.side.wasm`,
     `${executable}.audio.worklet.js`,
@@ -198,14 +198,11 @@ export default function EditorPage() {
       if (!preflight.ok) {
         setMissingAssets(preflight.missing);
         
-        const hasPckMissing = preflight.missing.some(m => m.includes('.pck'));
         let errMsg = `Required Wasm assets are missing or unreachable:\n${preflight.missing.join('\n')}`;
-        if (hasPckMissing) {
-          errMsg += `\n\n[CRITICAL ERROR] The Godot Editor pack file (.pck) is missing from public/godot-wasm/.\n` +
-            `To resolve this, you can click "Download Assets Automatically" below, or run the following command in your terminal:\n\n` +
-            `pnpm --filter @browser-forge/godot-wasm download\n\n` +
-            `After downloading, refresh this page to launch the editor.`;
-        }
+        errMsg += `\n\n[CRITICAL ERROR] Required Godot Editor assets are missing from public/godot-wasm/.\n` +
+          `To resolve this, you can click "Download Assets Automatically" below, or run the following command in your terminal:\n\n` +
+          `pnpm --filter @browser-forge/godot-wasm download\n\n` +
+          `After downloading, refresh this page to launch the editor.`;
         setError(errMsg);
         setLoading(false);
         return;
@@ -459,10 +456,10 @@ export default function EditorPage() {
                 {error}
               </pre>
               
-              {missingAssets.some(m => m.includes('.pck')) && (
+              {missingAssets.length > 0 && (
                 <div className="mb-6 p-5 bg-brand-500/10 border border-brand-500/30 rounded-xl max-w-xl text-center">
                   <p className="text-brand-300 font-medium text-sm mb-3">
-                    The Godot Editor asset pack (.pck) is missing or could not be loaded.
+                    Required Godot Editor assets are missing or could not be loaded.
                   </p>
                   
                   {downloadingAssets ? (

@@ -32,7 +32,7 @@ export async function assetRoutes(fastify: FastifyInstance) {
     // Start download in the background
     void (async () => {
       try {
-        const zipUrl = 'https://downloads.tuxfamily.org/godotengine/4.2.2/Godot_v4.2.2-stable_web_editor.zip';
+        const zipUrl = 'https://github.com/godotengine/godot-builds/releases/download/4.2.2-stable/Godot_v4.2.2-stable_web_editor.zip';
         const tmpDir = join(__dirname, '..', '..', '..', '..', 'tmp');
         await fs.mkdir(tmpDir, { recursive: true });
         const tmpZipPath = join(tmpDir, 'web_editor.zip');
@@ -45,37 +45,17 @@ export async function assetRoutes(fastify: FastifyInstance) {
         await fs.writeFile(tmpZipPath, Buffer.from(fileStream));
 
         downloadStatus.progress = 60;
-        downloadStatus.label = 'Extracting godot.editor.pck...';
+        downloadStatus.label = 'Extracting Godot Editor assets...';
 
-        // 2. Extract godot.editor.pck using the OS unzip command
-        const destPckPath = join(webPublicDir, 'godot.editor.pck');
+        // 2. Extract all files from ZIP using the OS unzip command
         await fs.mkdir(webPublicDir, { recursive: true });
 
-        // Unzip just the godot.editor.pck file to the target directory
-        exec(`unzip -o "${tmpZipPath}" "godot.editor.pck" -d "${webPublicDir}"`, async (err, stdout, stderr) => {
+        exec(`unzip -o "${tmpZipPath}" -d "${webPublicDir}"`, async (err, stdout, stderr) => {
           try {
             if (err) {
-              // Try standard fallback where the name matches the ZIP name
-              exec(`unzip -o "${tmpZipPath}" "*.pck" -d "${webPublicDir}"`, async (err2, stdout2, stderr2) => {
-                try {
-                  if (err2) {
-                    throw new Error(`Unzip failed: ${stderr2 || err2.message}`);
-                  }
-                  
-                  // If it extracted a file with a different name, rename it to godot.editor.pck
-                  const files = await fs.readdir(webPublicDir);
-                  const pckFile = files.find(f => f.endsWith('.pck') && f !== 'godot.editor.pck');
-                  if (pckFile) {
-                    await fs.rename(join(webPublicDir, pckFile), destPckPath);
-                  }
-                  await completeDownload(tmpZipPath);
-                } catch (innerErr) {
-                  failDownload(innerErr as Error);
-                }
-              });
-            } else {
-              await completeDownload(tmpZipPath);
+              throw new Error(`Unzip failed: ${stderr || err.message}`);
             }
+            await completeDownload(tmpZipPath);
           } catch (innerErr) {
             failDownload(innerErr as Error);
           }
