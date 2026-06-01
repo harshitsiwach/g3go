@@ -15,7 +15,7 @@
  * This module encapsulates the upload pipeline + a debounce layer.
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+const API_BASE = '';
 
 export interface SyncOptions {
   projectId: string;
@@ -34,9 +34,23 @@ export async function syncProjectZip(opts: SyncOptions): Promise<{ size: number;
   const form = new FormData();
   form.append('file', blob, 'project.zip');
 
+  const headers = new Headers();
+  if (typeof window !== 'undefined') {
+    const raw = localStorage.getItem('browserforge.session');
+    if (raw) {
+      try {
+        const { token } = JSON.parse(raw);
+        if (token) {
+          headers.set('Authorization', `Bearer ${token}`);
+        }
+      } catch {}
+    }
+  }
+
   const res = await fetch(`${API_BASE}/api/projects/${opts.projectId}/import-zip`, {
     method: 'POST',
     body: form,
+    headers,
     signal: opts.signal,
   });
   if (!res.ok) {

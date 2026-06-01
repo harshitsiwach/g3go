@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import db from '../db.js';
+import { authenticateRequest } from '../middleware/auth.js';
+import { fileRoutes } from './files.js';
 
 const ProjectSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -13,25 +15,32 @@ const Web3ConfigSchema = z.object({
   chains: z.array(z.enum(['solana', 'base', 'polygon'])).default([]),
   solana: z
     .object({
-      rpcUrl: z.string().url().optional(),
-      tokenMint: z.string().optional(),
-      programId: z.string().optional(),
+      rpcUrl: z.string().url().optional().or(z.literal('')),
+      tokenMint: z.string().optional().or(z.literal('')),
+      programId: z.string().optional().or(z.literal('')),
     })
     .optional(),
   evm: z
     .object({
-      chainId: z.number().int().optional(),
-      rpcUrl: z.string().url().optional(),
-      tokenAddress: z.string().optional(),
+      chainId: z.number().int().optional().nullable(),
+      rpcUrl: z.string().url().optional().or(z.literal('')),
+      tokenAddress: z.string().optional().or(z.literal('')),
     })
     .optional(),
 });
 
 export async function projectRoutes(fastify: FastifyInstance) {
-  fastify.get('/', async () => {
+  // Add authentication middleware
+  fastify.addHook('preHandler', authenticateRequest);
+
+  // Register file routes nested under this plugin so they inherit /api/projects prefix and don't collide
+  await fastify.register(fileRoutes);
+
+  fastify.get('/', async (request) => {
+    const userId = (request as any).userId;
     const projects = db
-      .prepare('SELECT * FROM projects ORDER BY updated_at DESC')
-      .all() as any[];
+      .prepare('SELECT * FROM projects WHERE user_id = ? ORDER BY updated_at DESC')
+      .all(userId) as any[];
     return {
       success: true,
       data: projects.map((p) => ({
@@ -51,7 +60,8 @@ export async function projectRoutes(fastify: FastifyInstance) {
 
   fastify.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
     const { id } = request.params;
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
+    const userId = (request as any).userId;
+    const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(id, userId) as any;
     if (!project) {
       return reply.status(404).send({ success: false, error: 'Project not found' });
     }
@@ -82,6 +92,8 @@ export async function projectRoutes(fastify: FastifyInstance) {
       });
     }
 
+    const userId = (request as any).userId;
+
     // Per-template display name. Falls back to a timestamped default so a
     // user can fire `POST /api/projects {}` with nothing and still get back
     // a project they can immediately open in the editor.
@@ -106,13 +118,13 @@ export async function projectRoutes(fastify: FastifyInstance) {
       id,
       name,
       result.data.description || '',
-      'user-1',
+      userId,
       template,
       now,
       now,
     );
 
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
+    const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(id, userId) as any;
     return reply.status(201).send({
       success: true,
       data: {
@@ -132,7 +144,8 @@ export async function projectRoutes(fastify: FastifyInstance) {
 
   fastify.patch<{ Params: { id: string } }>('/:id', async (request, reply) => {
     const { id } = request.params;
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
+    const userId = (request as any).userId;
+    const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(id, userId) as any;
     if (!project) {
       return reply.status(404).send({ success: false, error: 'Project not found' });
     }
@@ -164,9 +177,10 @@ export async function projectRoutes(fastify: FastifyInstance) {
     }
 
     values.push(id);
-    db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    values.push(userId);
+    db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`).run(...values);
 
-    const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
+    const updated = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(id, userId) as any;
     return {
       success: true,
       data: {
@@ -187,7 +201,8 @@ export async function projectRoutes(fastify: FastifyInstance) {
   // PATCH /:id/web3 — update the web3 config (no project body required)
   fastify.patch<{ Params: { id: string } }>('/:id/web3', async (request, reply) => {
     const { id } = request.params;
-    const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
+    const userId = (request as any).userId;
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(id, userId);
     if (!project) {
       return reply.status(404).send({ success: false, error: 'Project not found' });
     }
@@ -203,19 +218,20 @@ export async function projectRoutes(fastify: FastifyInstance) {
 
     const now = new Date().toISOString();
     db.prepare(`
-      UPDATE projects SET web3_config = ?, updated_at = ? WHERE id = ?
-    `).run(JSON.stringify(result.data), now, id);
+      UPDATE projects SET web3_config = ?, updated_at = ? WHERE id = ? AND user_id = ?
+    `).run(JSON.stringify(result.data), now, id, userId);
 
     return { success: true, data: result.data };
   });
 
   fastify.delete<{ Params: { id: string } }>('/:id', async (request, reply) => {
     const { id } = request.params;
-    const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
+    const userId = (request as any).userId;
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(id, userId);
     if (!project) {
       return reply.status(404).send({ success: false, error: 'Project not found' });
     }
-    db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    db.prepare('DELETE FROM projects WHERE id = ? AND user_id = ?').run(id, userId);
     return { success: true };
   });
 }

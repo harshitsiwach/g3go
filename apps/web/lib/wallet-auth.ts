@@ -4,7 +4,7 @@
  */
 import type { WalletChallenge, WalletChallengeRequest, WalletVerifyRequest } from '@browser-forge/shared';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+const API_BASE = '';
 
 export async function getWalletChallenge(
   req: WalletChallengeRequest,
@@ -61,7 +61,8 @@ export async function signSolana(message: string): Promise<string> {
   const res = await provider.signMessage(encoded, 'utf8');
   // Base64-encode the signature so it survives JSON transport
   let bin = '';
-  const bytes: Uint8Array = res.signature;
+  // Handle both { signature: Uint8Array } and raw Uint8Array / Buffer signatures
+  const bytes: Uint8Array = res.signature ?? res;
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
 }

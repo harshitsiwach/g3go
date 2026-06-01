@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { EditorToolbar } from '@/components/editor-toolbar';
 import { FileTree } from '@/components/file-tree';
 import { Web3Panel } from '@/components/Web3Panel';
+import { useAuth } from '@/lib/auth-context';
 import type { GodotEngineInstance } from '@/lib/godot-engine-types';
 
 // ------------------------------------------------------------
@@ -147,36 +148,36 @@ async function preflightAssets(executable: string): Promise<{
   ok: boolean;
   missing: string[];
 }> {
-  // Strict preflight: only fail on files the runtime is *guaranteed* to
-  // request. Optional files (.side.wasm, audio worklets) are reported in
-  // the UI if missing but don't block — the binary may or may not request
-  // them depending on its compile-time flags.
-  const baseUrl = executable.replace(/\/[^/]+$/, '');
-  const required = [`${executable}.js`, `${executable}.wasm`];
+  // Required files: .js (script), .wasm (binary), and .pck (editor asset pack)
+  const required = [`${executable}.js`, `${executable}.wasm`, `${executable}.pck`];
   const optional = [
     `${executable}.side.wasm`,
     `${executable}.audio.worklet.js`,
     `${executable}.audio.position.worklet.js`,
   ];
+  
   const check = async (path: string): Promise<{ url: string; status: number | string }> => {
-    const url = path.startsWith('http')
-      ? path
-      : `${baseUrl}/${path.replace(baseUrl + '/', '')}`;
+    // Since the paths are absolute from the webroot (e.g. /godot-wasm/godot.editor.js),
+    // we can request them directly without complex string replacements.
     try {
-      const res = await fetch(url, { method: 'HEAD' });
-      return { url, status: res.status };
+      const res = await fetch(path, { method: 'HEAD' });
+      return { url: path, status: res.status };
     } catch (err) {
-      return { url, status: err instanceof Error ? err.message : 'fetch failed' };
+      return { url: path, status: err instanceof Error ? err.message : 'fetch failed' };
     }
   };
+
   const requiredResults = await Promise.all(required.map(check));
   const optionalResults = await Promise.all(optional.map(check));
+  
   const missing = requiredResults
     .filter((r) => typeof r.status !== 'number' || r.status >= 400)
     .map((r) => `${r.url} → ${r.status}`);
+    
   const optionalMissing = optionalResults
     .filter((r) => typeof r.status !== 'number' || r.status >= 400)
     .map((r) => `${r.url} → ${r.status}`);
+    
   return { ok: missing.length === 0, missing: [...missing, ...optionalMissing] };
 }
 
@@ -184,6 +185,7 @@ export default function EditorPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { fetchWithAuth } = useAuth();
   const projectId = params.id as string;
   const shouldImport = searchParams.get('import') === 'true';
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -223,9 +225,16 @@ export default function EditorPage() {
       const preflight = await preflightAssets(executable);
       if (!preflight.ok) {
         setMissingAssets(preflight.missing);
-        setError(
-          `Required Wasm assets are missing or unreachable:\n${preflight.missing.join('\n')}`,
-        );
+        
+        const hasPckMissing = preflight.missing.some(m => m.includes('.pck'));
+        let errMsg = `Required Wasm assets are missing or unreachable:\n${preflight.missing.join('\n')}`;
+        if (hasPckMissing) {
+          errMsg += `\n\n[CRITICAL ERROR] The Godot Editor pack file (.pck) is missing from public/godot-wasm/.\n` +
+            `To resolve this, please run the following command in your project directory to download the editor assets:\n\n` +
+            `pnpm --filter @browser-forge/godot-wasm download\n\n` +
+            `After downloading, refresh this page to launch the editor.`;
+        }
+        setError(errMsg);
         setLoading(false);
         return;
       }
@@ -265,7 +274,7 @@ export default function EditorPage() {
         setLoadingMessage('Importing project…');
         setProgress(85);
         try {
-          const zipResponse = await fetch(`/api/projects/${projectId}/import-zip`);
+          const zipResponse = await fetchWithAuth(`/api/projects/${projectId}/import-zip`);
           if (zipResponse.ok) {
             const zipBuffer = await zipResponse.arrayBuffer();
             setProgress(90);
@@ -304,7 +313,7 @@ export default function EditorPage() {
       setError(msg);
       setLoading(false);
     }
-  }, [projectId, shouldImport, router, appendLog]);
+  }, [projectId, shouldImport, router, appendLog, fetchWithAuth]);
 
   useEffect(() => {
     if (projectId === 'new') {
@@ -313,7 +322,7 @@ export default function EditorPage() {
       const template = params.get('template') || 'blank';
       const name = params.get('name') || undefined;
 
-      fetch('/api/projects', {
+      fetchWithAuth('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ template, ...(name ? { name } : {}) }),
@@ -349,7 +358,7 @@ export default function EditorPage() {
     // NOTE: no cleanup. The engine is intentionally kept alive across React
     // re-renders and route navigations within the same tab. See the module
     // comment above for why.
-  }, [projectId, initEngine, router]);
+  }, [projectId, initEngine, router, fetchWithAuth]);
 
   const handleSave = async () => {
     const engine = engineRef.current;
@@ -367,7 +376,7 @@ export default function EditorPage() {
         }
       }
       if (!bytes) {
-        const res = await fetch(`/api/projects/${projectId}/import-zip`);
+        const res = await fetchWithAuth(`/api/projects/${projectId}/import-zip`);
         if (!res.ok) {
           alert('Project saved to browser storage (no zip to upload).');
           return;

@@ -8,6 +8,7 @@ import { PlatformSelector } from '@/components/export/PlatformSelector';
 import { runExport, type ExportResult } from '@/lib/godot-export';
 import { buildExportZip, downloadZip } from '@/lib/export-builder';
 import { checkBrowserSupport } from '@/lib/godot-runtime';
+import { useAuth } from '@/lib/auth-context';
 import type { ExportFormat, ExportPlatform, Project } from '@browser-forge/shared';
 import { cn } from '@/lib/utils';
 
@@ -21,10 +22,35 @@ const STAGE_LABEL: Record<Stage, string> = {
   failed: 'Export failed',
 };
 
+async function preflightTemplateAssets(executable: string): Promise<{
+  ok: boolean;
+  missing: string[];
+}> {
+  const required = [`${executable}.js`, `${executable}.wasm`];
+  
+  const check = async (path: string): Promise<{ url: string; status: number | string }> => {
+    try {
+      const res = await fetch(path, { method: 'HEAD' });
+      return { url: path, status: res.status };
+    } catch (err) {
+      return { url: path, status: err instanceof Error ? err.message : 'fetch failed' };
+    }
+  };
+
+  const requiredResults = await Promise.all(required.map(check));
+  
+  const missing = requiredResults
+    .filter((r) => typeof r.status !== 'number' || r.status >= 400)
+    .map((r) => `${r.url} → ${r.status}`);
+    
+  return { ok: missing.length === 0, missing };
+}
+
 export default function ExportPage() {
   const params = useParams();
   const router = useRouter();
   const projectId = params.id as string;
+  const { fetchWithAuth } = useAuth();
 
   const [project, setProject] = useState<Project | null>(null);
   const [format, setFormat] = useState<ExportFormat>('webgl');
@@ -42,7 +68,7 @@ export default function ExportPage() {
 
   const fetchProject = useCallback(async () => {
     try {
-      const res = await fetch(`/api/projects/${projectId}`);
+      const res = await fetchWithAuth(`/api/projects/${projectId}`);
       const data = await res.json();
       if (data.success) {
         setProject({
@@ -57,7 +83,7 @@ export default function ExportPage() {
     } catch (err) {
       console.error('Failed to fetch project', err);
     }
-  }, [projectId]);
+  }, [projectId, fetchWithAuth]);
 
   // load on mount
   if (!project) {
@@ -93,17 +119,31 @@ export default function ExportPage() {
       return;
     }
 
+    const executable = '/godot-wasm/godot.template_release';
+    const templatePreflight = await preflightTemplateAssets(executable);
+    if (!templatePreflight.ok) {
+      setError(
+        `Required Export Template assets are missing or unreachable:\n` +
+        `${templatePreflight.missing.join('\n')}\n\n` +
+        `Please run the following command in your project directory to download the export template assets:\n\n` +
+        `pnpm --filter @browser-forge/godot-wasm download\n\n` +
+        `After downloading, refresh this page.`
+      );
+      setStage('failed');
+      return;
+    }
+
     setStage('exporting');
     try {
       // Tell the server we started an export (for analytics only)
-      void fetch('/api/export', {
+      void fetchWithAuth('/api/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId, format, platform }),
       }).catch(() => {/* fire-and-forget */});
 
       // Pull the project's source from the server
-      const zipRes = await fetch(`/api/projects/${projectId}/import-zip`);
+      const zipRes = await fetchWithAuth(`/api/projects/${projectId}/import-zip`);
       let projectZip: Uint8Array | undefined;
       if (zipRes.ok) {
         const buf = await zipRes.arrayBuffer();
@@ -266,7 +306,7 @@ export default function ExportPage() {
             </div>
           )}
 
-          {error && <p className="text-red-400 mt-3 text-sm">{error}</p>}
+          {error && <pre className="text-red-400 mt-3 text-sm whitespace-pre-wrap font-mono">{error}</pre>}
 
           {stage === 'completed' && result && (
             <div className="mt-3 grid grid-cols-3 gap-3 text-center text-sm">

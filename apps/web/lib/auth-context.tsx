@@ -13,6 +13,7 @@ interface AuthContextValue extends AuthState {
   setSession: (token: string, user: User) => void;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
+  fetchWithAuth: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -62,12 +63,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const fetchWithAuth = useCallback(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    let token = state.sessionToken;
+    if (!token && typeof window !== 'undefined') {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        try {
+          token = JSON.parse(raw).token;
+        } catch {}
+      }
+    }
+    const headers = new Headers(init?.headers);
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    return fetch(input, {
+      ...init,
+      headers,
+    });
+  }, [state.sessionToken]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   return (
-    <AuthContext.Provider value={{ ...state, setSession, logout, refresh }}>
+    <AuthContext.Provider value={{ ...state, setSession, logout, refresh, fetchWithAuth }}>
       {children}
     </AuthContext.Provider>
   );

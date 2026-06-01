@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import db from '../db.js';
+import { authenticateRequest } from '../middleware/auth.js';
 
 const ExportSchema = z.object({
   projectId: z.string().min(1),
-  format: z.enum(['webgl', 'webgpu', 'windows', 'macos', 'linux', 'telegram', 'x', 'reddit']),
+  format: z.enum(['webgl', 'webgpu']),
   platform: z.string().optional(),
 });
 
@@ -15,6 +16,9 @@ const ExportSchema = z.object({
  * produced in the browser and downloaded directly by the user.
  */
 export async function exportRoutes(fastify: FastifyInstance) {
+  // Add authentication middleware
+  fastify.addHook('preHandler', authenticateRequest);
+
   fastify.post('/', async (request, reply) => {
     const body = request.body as any;
     const result = ExportSchema.safeParse(body);
@@ -27,9 +31,10 @@ export async function exportRoutes(fastify: FastifyInstance) {
     }
 
     const { projectId, format, platform } = result.data;
+    const userId = (request as any).userId;
 
-    // Verify the project exists
-    const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
+    // Verify the project exists and belongs to the user
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
     if (!project) {
       return reply.status(404).send({ success: false, error: 'Project not found' });
     }
@@ -73,6 +78,14 @@ export async function exportRoutes(fastify: FastifyInstance) {
     if (!projectId) {
       return reply.status(400).send({ success: false, error: 'projectId is required' });
     }
-    return { success: true, data: [] };
+    const userId = (request as any).userId;
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
+    if (!project) {
+      return reply.status(404).send({ success: false, error: 'Project not found' });
+    }
+    return {
+      success: true,
+      data: []
+    };
   });
 }

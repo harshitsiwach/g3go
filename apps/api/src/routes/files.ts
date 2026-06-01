@@ -5,9 +5,10 @@ export async function fileRoutes(fastify: FastifyInstance) {
   // Upload file to project
   fastify.post<{ Params: { id: string } }>('/:id/files', async (request, reply) => {
     const { id: projectId } = request.params;
+    const userId = (request as any).userId;
 
-    // Check project exists
-    const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
+    // Check project exists and belongs to user
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
     if (!project) {
       return reply.status(404).send({ success: false, error: 'Project not found' });
     }
@@ -45,6 +46,12 @@ export async function fileRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string; '*': string } }>('/:id/files/*', async (request, reply) => {
     const { id: projectId } = request.params;
     const filePath = (request.params as any)['*'];
+    const userId = (request as any).userId;
+
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
+    if (!project) {
+      return reply.status(404).send({ success: false, error: 'Project not found' });
+    }
 
     const file = db.prepare(
       'SELECT content, size FROM project_files WHERE project_id = ? AND path = ?'
@@ -64,6 +71,12 @@ export async function fileRoutes(fastify: FastifyInstance) {
   fastify.delete<{ Params: { id: string; '*': string } }>('/:id/files/*', async (request, reply) => {
     const { id: projectId } = request.params;
     const filePath = (request.params as any)['*'];
+    const userId = (request as any).userId;
+
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
+    if (!project) {
+      return reply.status(404).send({ success: false, error: 'Project not found' });
+    }
 
     const result = db.prepare(
       'DELETE FROM project_files WHERE project_id = ? AND path = ?'
@@ -79,6 +92,12 @@ export async function fileRoutes(fastify: FastifyInstance) {
   // List files in project
   fastify.get<{ Params: { id: string } }>('/:id/files', async (request, reply) => {
     const { id: projectId } = request.params;
+    const userId = (request as any).userId;
+
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
+    if (!project) {
+      return reply.status(404).send({ success: false, error: 'Project not found' });
+    }
 
     const files = db.prepare(
       'SELECT path, size FROM project_files WHERE project_id = ?'
@@ -90,6 +109,12 @@ export async function fileRoutes(fastify: FastifyInstance) {
   // Get project import ZIP
   fastify.get<{ Params: { id: string } }>('/:id/import-zip', async (request, reply) => {
     const { id: projectId } = request.params;
+    const userId = (request as any).userId;
+
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
+    if (!project) {
+      return reply.status(404).send({ success: false, error: 'Project not found' });
+    }
 
     const file = db.prepare(
       'SELECT content, size FROM project_files WHERE project_id = ? AND path = ?'
@@ -120,9 +145,10 @@ export async function fileRoutes(fastify: FastifyInstance) {
   // Upload project ZIP
   fastify.post<{ Params: { id: string } }>('/:id/import-zip', async (request, reply) => {
     const { id: projectId } = request.params;
+    const userId = (request as any).userId;
 
-    // Check project exists
-    const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
+    // Check project exists and belongs to user
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
     if (!project) {
       return reply.status(404).send({ success: false, error: 'Project not found' });
     }

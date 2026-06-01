@@ -3,7 +3,6 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { projectRoutes } from './routes/projects.js';
 import { exportRoutes } from './routes/export.js';
-import { fileRoutes } from './routes/files.js';
 import { authRoutes } from './routes/auth.js';
 
 const server = Fastify({
@@ -36,7 +35,6 @@ await server.register(multipart, {
 await server.register(authRoutes, { prefix: '/api/auth' });
 await server.register(projectRoutes, { prefix: '/api/projects' });
 await server.register(exportRoutes, { prefix: '/api/export' });
-await server.register(fileRoutes, { prefix: '/api/projects' });
 
 // Health check
 server.get('/api/health', async () => {

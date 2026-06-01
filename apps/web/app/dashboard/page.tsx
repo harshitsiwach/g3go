@@ -5,10 +5,12 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Plus, Upload, Gamepad2, Clock, MoreVertical, Loader2, Trash2, Wallet, Sparkles } from 'lucide-react';
 import { TemplateGallery } from '@/components/TemplateGallery';
+import { useAuth } from '@/lib/auth-context';
 import type { Project } from '@browser-forge/shared';
 
 export default function DashboardPage() {
   const router = useRouter();
+  const { fetchWithAuth } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNewModal, setShowNewModal] = useState(false);
@@ -21,7 +23,7 @@ export default function DashboardPage() {
   const fetchProjects = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/projects');
+      const response = await fetchWithAuth('/api/projects');
       const data = await response.json();
       if (data.success) {
         setProjects(data.data.map((p: any) => ({
@@ -36,7 +38,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchWithAuth]);
 
   useEffect(() => {
     fetchProjects();
@@ -49,7 +51,7 @@ export default function DashboardPage() {
 
   const createProject = async (template: string, name: string) => {
     try {
-      const response = await fetch('/api/projects', {
+      const response = await fetchWithAuth('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, description: '', template }),
@@ -78,7 +80,7 @@ export default function DashboardPage() {
     if (!confirm('Are you sure you want to delete this project?')) return;
 
     try {
-      const response = await fetch(`/api/projects/${id}`, {
+      const response = await fetchWithAuth(`/api/projects/${id}`, {
         method: 'DELETE',
       });
 
@@ -105,7 +107,7 @@ export default function DashboardPage() {
     try {
       const projectName = file.name.replace(/\.zip$/i, '').replace(/[-_]/g, ' ');
 
-      const createResponse = await fetch('/api/projects', {
+      const createResponse = await fetchWithAuth('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -126,7 +128,7 @@ export default function DashboardPage() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const uploadResponse = await fetch(`/api/projects/${projectId}/import-zip`, {
+      const uploadResponse = await fetchWithAuth(`/api/projects/${projectId}/import-zip`, {
         method: 'POST',
         body: formData,
       });
@@ -136,6 +138,8 @@ export default function DashboardPage() {
       }
 
       await fetchProjects();
+      setImporting(false);
+      setImportProgress('');
       router.push(`/editor/${projectId}?import=true`);
     } catch (error) {
       console.error('Import failed:', error);

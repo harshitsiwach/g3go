@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { Wallet, ChevronDown, ChevronUp, Check, X, Loader2, ExternalLink } from 'lucide-react';
 import type { Web3Config, Web3Chain, Project } from '@browser-forge/shared';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/lib/auth-context';
 
 const CHAIN_INFO: Record<Web3Chain, { label: string; explorer: string; color: string }> = {
   solana: { label: 'Solana', explorer: 'https://solscan.io', color: 'text-purple-400' },
@@ -17,6 +18,7 @@ const ALL_CHAINS: Web3Chain[] = ['solana', 'base', 'polygon'];
 export function Web3Panel() {
   const params = useParams();
   const projectId = params.id as string;
+  const { fetchWithAuth } = useAuth();
 
   const [config, setConfig] = useState<Web3Config | null>(null);
   const [loading, setLoading] = useState(true);
@@ -30,7 +32,7 @@ export function Web3Panel() {
     let mounted = true;
     (async () => {
       try {
-        const res = await fetch(`/api/projects/${projectId}`);
+        const res = await fetchWithAuth(`/api/projects/${projectId}`);
         const data = await res.json();
         if (mounted && data.success) {
           setConfig(
@@ -47,7 +49,7 @@ export function Web3Panel() {
     return () => {
       mounted = false;
     };
-  }, [projectId]);
+  }, [projectId, fetchWithAuth]);
 
   const update = (patch: Partial<Web3Config>) => {
     setConfig((prev) => ({ ...(prev ?? { enabled: false, chains: [] }), ...patch }));
@@ -59,7 +61,7 @@ export function Web3Panel() {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/projects/${projectId}/web3`, {
+      const res = await fetchWithAuth(`/api/projects/${projectId}/web3`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
